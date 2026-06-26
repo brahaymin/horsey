@@ -1,35 +1,64 @@
 name: Daily SPY Gamma Update
+
 on:
- schedule:
-   # Runs every weekday at 8:30 PM CDT (after market close)
-   - cron: '30 20 * * 1-5'
- workflow_dispatch:   # Allows manual trigger from GitHub UI
+
+  schedule:
+
+    - cron: '30 20 * * 1-5'
+
+  workflow_dispatch:
+
+permissions:
+
+  contents: write          # <-- This is the important new line
+
 jobs:
- update-gamma:
-   runs-on: ubuntu-latest
-   steps:
-     - name: Checkout repository
-       uses: actions/checkout@v4
-     - name: Set up Python
-       uses: actions/setup-python@v5
-       with:
-         python-version: '3.12'
-     - name: Install dependencies
-       run: |
-         python -m pip install --upgrade pip
-         pip install pandas matplotlib yfinance
-     - name: Run gamma script
-       env:
-         # Optional: You can set GEX values here if you want full automation later
-         NET_GEX: ""
-         CALL_WALL: ""
-         PUT_WALL: ""
-         GAMMA_FLIP: ""
-       run: python gamma_gex.py
-     - name: Commit and push updates
-       run: |
-         git config user.name "github-actions[bot]"
-         git config user.email "github-actions[bot]@users.noreply.github.com"
-         git add spy_historical.csv spy_gamma_chart_*.png || true
-         git commit -m "Daily gamma update: $(date +'%Y-%m-%d')" || echo "No changes to commit"
-         git push
+
+  update-gamma:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repo
+
+        uses: actions/checkout@v4
+
+        with:
+
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+
+        uses: actions/setup-python@v5
+
+        with:
+
+          python-version: '3.12'
+
+      - name: Install dependencies
+
+        run: |
+
+          python -m pip install --upgrade pip
+
+          pip install pandas matplotlib yfinance
+
+      - name: Run gamma script
+
+        run: python gamma_gex.py
+
+      - name: Commit and push updates
+
+        run: |
+
+          git config user.name "github-actions[bot]"
+
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add spy_historical.csv spy_gamma_chart_*.png || true
+
+          git commit -m "Daily gamma update $(date +'%Y-%m-%d')" || echo "No changes to commit"
+
+          git push
+ 
