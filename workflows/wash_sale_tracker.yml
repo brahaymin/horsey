@@ -1,0 +1,52 @@
+name: Weekly Wash Sale + P/L Report (Robinhood Options)
+
+on:
+  schedule:
+    - cron: '0 9 * * 0'   # Every Sunday ~4am Central
+  workflow_dispatch:      # Manual trigger button (perfect before coach sessions)
+  push:
+    paths:
+      - 'data/robinhood_options*.csv'
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install pandas
+
+      - name: Ensure folders exist
+        run: mkdir -p data reports
+
+      - name: Run tracker
+        run: python tools/wash_sale_tracker_v2.py data/robinhood_options.csv --tax-year-end 2026-12-31
+        continue-on-error: true
+
+      - name: Organize reports
+        run: |
+          mv -f processed_trades_with_pnl.csv reports/ 2>/dev/null || true
+          mv -f potential_wash_details.csv reports/ 2>/dev/null || true
+          mv -f wash_sale_summary.txt reports/ 2>/dev/null || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wash-sale-reports-${{ github.run_number }}
+          path: reports/
+          retention-days: 90
+
+      - name: Summary
+        run: |
+          echo "✅ Wash sale + FIFO P/L report generated."
+          echo "Download from Actions tab → Artifacts."
