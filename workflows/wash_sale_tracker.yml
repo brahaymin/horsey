@@ -3,7 +3,7 @@ name: Weekly Wash Sale + P/L Report (Robinhood Options)
 on:
   schedule:
     - cron: '0 9 * * 0'   # Every Sunday ~4am Central
-  workflow_dispatch:      # Manual trigger button (perfect before coach sessions)
+  workflow_dispatch:      # Manual trigger button (great before coach sessions)
   push:
     paths:
       - 'data/robinhood_options*.csv'
@@ -30,7 +30,7 @@ jobs:
         run: mkdir -p data reports
 
       - name: Run tracker
-        run: python tools/wash_sale_tracker_v2.py data/robinhood_options.csv --tax-year-end 2026-12-31
+        run: python wash_sale_tracker.py data/robinhood_options.csv --tax-year-end 2026-12-31
         continue-on-error: true
 
       - name: Organize reports
@@ -50,3 +50,4 @@ jobs:
         run: |
           echo "✅ Wash sale + FIFO P/L report generated."
           echo "Download from Actions tab → Artifacts."
+          echo "This helps track progress toward your mid-November trading stop & clean 2026 taxes."
