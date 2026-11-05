@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>SPY Gamma Structure &amp; Regime Monitor</title>
+<meta name="description" content="Hourly archive of SPY gamma exposure, walls, VIX term structure and relative strength. Public data only; no trade ideas.">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<style>
+:root{--bg:#0b0f17;--panel:#121826;--panel2:#182033;--line:#243049;--txt:#e6ebf5;--mut:#8b97b0;--pos:#22c55e;--neg:#f43f5e;--acc:#38bdf8;--warn:#f59e0b;--vio:#a78bfa}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;-webkit-text-size-adjust:100%}
+a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
+.wrap{max-width:1500px;margin:0 auto;padding:12px max(12px,env(safe-area-inset-left))}
+header{position:sticky;top:0;z-index:20;background:rgba(11,15,23,.94);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+h1{font-size:clamp(16px,2.4vw,22px);margin:0 0 6px;letter-spacing:.2px}
+h2{font-size:15px;margin:0 0 10px;color:#cdd6ea;text-transform:uppercase;letter-spacing:.6px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.pill{padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid var(--line);background:var(--panel2);white-space:nowrap}
+.pill.neg{color:#fecdd3;border-color:#7f1d1d;background:#3b0d16}.pill.pos{color:#bbf7d0;border-color:#14532d;background:#0b2a17}.pill.warn{color:#fde68a;border-color:#78350f;background:#2d1d06}
+select,button{font:inherit;color:var(--txt);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer}
+select{max-width:100%}button.on{background:#0c4a6e;border-color:var(--acc)}
+.links a{font-size:12.5px;padding:4px 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel)}
+.grid{display:grid;gap:12px}.kpis{grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));margin:12px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;min-width:0}
+.kpi .lbl{color:var(--mut);font-size:11.5px;text-transform:uppercase;letter-spacing:.5px}.kpi .val{font-size:22px;font-weight:700;margin:4px 0 2px;font-variant-numeric:tabular-nums}.kpi .sub{color:var(--mut);font-size:12.5px}
+.neg{color:var(--neg)}.pos{color:var(--pos)}.mut{color:var(--mut)}
+.two{grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr))}
+.chartbox{position:relative;height:clamp(280px,42vh,440px);width:100%}.chartbox.sm{height:clamp(220px,32vh,320px)}
+.tbl{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:13px}
+th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}th:first-child,td:first-child{text-align:left}
+th{color:var(--mut);font-weight:600;font-size:11.5px;text-transform:uppercase;cursor:default}th.sort{cursor:pointer}th.sort:hover{color:var(--txt)}
+tr.hl td{background:#16233a}
+.sec{margin:12px 0}.note{color:var(--mut);font-size:12px;margin-top:8px}
+.hd{list-style:none;padding:0;margin:0}.hd li{padding:8px 0;border-bottom:1px solid var(--line)}.hd .meta{color:var(--mut);font-size:12px}
+footer{color:var(--mut);font-size:12px;text-align:center;padding:20px 0 40px}
+#drawer{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;z-index:50}#drawer.open{display:block}
+#drawer .inner{position:absolute;right:0;top:0;bottom:0;width:min(100%,980px);background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:16px 18px}
+#md{overflow-x:auto}#md table{font-size:12px}#md pre{white-space:pre-wrap}#md h1,#md h2,#md h3{text-transform:none;letter-spacing:0}
+.err{background:#3b0d16;border:1px solid #7f1d1d;padding:10px;border-radius:8px;display:none}
+</style></head><body>
+<header><div class="wrap">
+<h1>SPY Gamma Structure &amp; Regime Monitor</h1>
+<div class="row" id="pills"></div>
+<div class="row" style="margin-top:8px">
+<label class="mut" for="snapSel">Snapshot:</label><select id="snapSel" aria-label="Historical snapshot"></select>
+<span class="mut" id="asof"></span>
+</div>
+<div class="row links" style="margin-top:8px">
+<a href="#" id="openMd">📄 View Full Markdown Report</a>
+<a id="lnkMd" target="_blank" rel="noopener">Raw Markdown (.md)</a>
+<a id="lnkJson" target="_blank" rel="noopener">Raw JSON</a>
+<a href="history/timeseries.csv" target="_blank" rel="noopener">Timeseries CSV</a>
+<a href="https://github.com/brahaymin/horsey" target="_blank" rel="noopener">GitHub Repo</a>
+</div></div></header>
+<main class="wrap">
+<div class="err" id="err"></div>
+<section class="grid kpis" id="kpis"></section>
+
+<section class="card sec">
+<h2>Strike-by-Strike GEX ($700–$810)</h2>
+<div class="row" id="scopeBtns"></div>
+<div class="row" style="margin-top:6px" id="modeBtns"></div>
+<div class="chartbox" style="margin-top:10px"><canvas id="gexChart"></canvas></div>
+<div class="note" id="gexNote"></div>
+<div class="tbl" style="margin-top:10px"><table id="scopeTbl"></table></div>
+</section>
+
+<section class="card sec">
+<h2>SPY Price, 200 SMA, $735 Node &amp; Volume</h2>
+<div class="row" id="pxBtns"></div>
+<div class="chartbox" style="margin-top:10px"><canvas id="pxChart"></canvas></div>
+<div class="note" id="pxNote"></div>
+<div class="tbl" id="logTblWrap" style="display:none;margin-top:10px"><table id="logTbl"></table></div>
+</section>
+
+<section class="grid two sec">
+<div class="card"><h2>$735 Strike Node Breakdown</h2><div class="tbl"><table id="nodeTbl"></table></div><div class="note">GEX in $M per 1% underlying move. OI-side proxy (long call / short put dealer convention), not observed dealer inventory.</div></div>
+<div class="card"><h2>VIX Implied-Volatility Term Structure</h2><div class="chartbox sm"><canvas id="vixChart"></canvas></div><div class="tbl"><table id="vixTbl"></table></div><div class="note" id="vixNote"></div></div>
+</section>
+
+<section class="card sec">
+<h2>AI Complex, Data-Center &amp; KBW Bank Relative Strength</h2>
+<div class="row" id="rsBtns"></div>
+<div class="chartbox" style="margin-top:10px;height:clamp(360px,50vh,520px)"><canvas id="rsChart"></canvas></div>
+<div class="tbl" style="margin-top:10px"><table id="rsTbl"></table></div>
+</section>
+
+<section class="grid two sec">
+<div class="card"><h2>Globex Futures (/ES, /NQ, /RTY)</h2><div class="tbl"><table id="futTbl"></table></div><div class="note">Yahoo Finance delayed quotes; displayed change/reference is not certified exchange settlement.</div></div>
+<div class="card"><h2>Verified Data-Center / AI Policy Headlines</h2><ul class="hd" id="news"></ul></div>
+</section>
+</main>
+<footer class="wrap">Zero trade ideas · Public Cboe &amp; Yahoo Finance feeds · All times Central Time (CT, America/Chicago)<br>Informational market-structure description only. GEX is a model proxy from open interest; zero-γ is a model estimate.</footer>
+<div id="drawer" role="dialog" aria-modal="true"><div class="inner"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Full Markdown Report</h2><button id="closeMd">✕ Close</button></div><div id="md">Loading…</div></div></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const HAS_CHART=typeof Chart!=="undefined";
+if(HAS_CHART){Chart.defaults.color="#8b97b0";Chart.defaults.borderColor="#243049";Chart.defaults.font.family="-apple-system,BlinkMacSystemFont,Segoe UI,Inter,Roboto,sans-serif";}
+const n=(v,d=2)=>v==null||isNaN(v)?"—":Number(v).toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d});
+const pct=(v,d=2)=>v==null?"—":(v>0?"+":"")+n(v,d)+"%";
+const sgn=(v,d=2)=>v==null?"—":(v>0?"+":"")+n(v,d);
+const cls=v=>v==null?"":v>0?"pos":v<0?"neg":"";
+const B=v=>v==null?"—":(v<0?"-":"")+"$"+n(Math.abs(v)/1e9,2)+"B";
+const M=v=>v==null?"—":(v<0?"-":"")+"$"+n(Math.abs(v)/1e6,1)+"M";
+const K=v=>v==null?"—":Number(v).toLocaleString("en-US");
+const fmtD=s=>{const d=new Date(s+"T12:00:00");return d.toLocaleDateString("en-US",{month:"short",day:"numeric"})};
+let IDX=null,S=null,LOG=null,charts={},st={scope:"next_session",mode:"net",px:"intraday",rs:"d1_pct",sortK:null,sortDir:-1};
+function err(m){const e=$("err");e.style.display="block";e.textContent=m}
+function mk(id,cfg){if(!HAS_CHART){$(id).parentElement.innerHTML='<div class="note">Chart library unavailable (offline CDN). Tables below remain accurate.</div>';return}
+ if(charts[id])charts[id].destroy();charts[id]=new Chart($(id),cfg)}
+// plugin: vertical reference lines on category x-axis
+const vlines={id:"vlines",afterDatasetsDraw(c,a,o){const L=o&&o.lines;if(!L)return;const{ctx,chartArea:ca,scales:{x}}=c;ctx.save();
+ L.forEach(l=>{let px=null;if(x.type==="category"){const labs=c.data.labels;let i=labs.findIndex(v=>+v>=l.v);if(i<0)return;if(i>0&&+labs[i]!==l.v){const a0=+labs[i-1],a1=+labs[i];px=x.getPixelForValue(i-1)+(x.getPixelForValue(i)-x.getPixelForValue(i-1))*(l.v-a0)/(a1-a0)}else px=x.getPixelForValue(i)}else px=x.getPixelForValue(l.v);
+ if(px==null||px<ca.left||px>ca.right)return;ctx.strokeStyle=l.c;ctx.lineWidth=l.w||1.5;ctx.setLineDash(l.dash||[]);ctx.beginPath();ctx.moveTo(px,ca.top);ctx.lineTo(px,ca.bottom);ctx.stroke();ctx.setLineDash([]);
+ ctx.fillStyle=l.c;ctx.font="600 11px sans-serif";ctx.textAlign="left";ctx.fillText(l.t,Math.min(px+3,ca.right-70),ca.top+12+(l.row||0)*13)});ctx.restore()}};
+// horizontal ref lines
+const hlines={id:"hlines",afterDatasetsDraw(c,a,o){const L=o&&o.lines;if(!L)return;const{ctx,chartArea:ca}=c;ctx.save();L.forEach(l=>{const y=c.scales[l.axis||"y"];if(!y)return;const py=y.getPixelForValue(l.v);if(py<ca.top||py>ca.bottom)return;ctx.strokeStyle=l.c;ctx.setLineDash(l.dash||[5,4]);ctx.beginPath();ctx.moveTo(ca.left,py);ctx.lineTo(ca.right,py);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=l.c;ctx.font="600 11px sans-serif";ctx.fillText(l.t,ca.left+4,py-4)});ctx.restore()}};
+if(HAS_CHART)Chart.register(vlines,hlines);
+
+async function getJSON(u){const r=await fetch(u,{cache:"no-cache"});if(!r.ok)throw new Error(u+" → HTTP "+r.status);return r.json()}
+async function init(){
+ try{IDX=await getJSON("snapshots/index.json")}catch(e){IDX={snapshots:[{id:"latest",display_ct:"Latest",json_path:"latest.json",md_path:"latest.md"}]}}
+ const sel=$("snapSel");IDX.snapshots.forEach((s,i)=>{const o=document.createElement("option");o.value=i;o.textContent=`${s.display_ct}${s.run_tag?" · "+s.run_tag:""}${s.spy_price!=null?" · SPY $"+n(s.spy_price):""}`;sel.appendChild(o)});
+ const want=new URLSearchParams(location.search).get("snap");let start=0;if(want){const i=IDX.snapshots.findIndex(s=>s.id===want);if(i>=0)start=i}
+ sel.value=start;sel.onchange=()=>load(+sel.value);
+ try{const t=await (await fetch("history/timeseries.jsonl",{cache:"no-cache"})).text();LOG=t.trim().split("\n").filter(Boolean).map(JSON.parse)}catch(e){LOG=[]}
+ buildButtons();await load(start)}
+async function load(i){const meta=IDX.snapshots[i];
+ try{S=await getJSON(meta.json_path)}catch(e){err("Failed to load snapshot: "+e.message);return}
+ $("lnkMd").href=S.md_rel_path||meta.md_path;$("lnkJson").href=meta.json_path;
+ const u=new URL(location);if(i===0)u.searchParams.delete("snap");else u.searchParams.set("snap",meta.id);history.replaceState(null,"",u);
+ $("asof").textContent="As of "+(meta.display_ct||S.timestamp_ct)+(S.gex_meta&&S.gex_meta.chain_timestamp?" · options chain "+utcToCT(S.gex_meta.chain_timestamp):"");
+ render()}
+function utcToCT(s){const d=new Date(s.replace(" ","T")+"Z");return d.toLocaleString("en-US",{timeZone:"America/Chicago",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})+" CT"}
+function btns(id,items,key,fn){const w=$(id);w.innerHTML="";items.forEach(([v,l])=>{const b=document.createElement("button");b.textContent=l;b.dataset.v=v;b.onclick=()=>{st[key]=v;[...w.children].forEach(x=>x.classList.toggle("on",x.dataset.v===v));fn()};if(st[key]===v)b.classList.add("on");w.appendChild(b)})}
+function buildButtons(){
+ btns("modeBtns",[["net","Net GEX ($M / 1%)"],["cp","Call vs Put GEX ($M / 1%)"]],"mode",drawGex);
+ btns("pxBtns",[["intraday","Session Intraday (30m CT + Put/Call Vol)"],["daily","15-Session Daily Trend (vs 20D/200D SMA + Share Vol)"],["log","Hourly Monitor Log (timeseries.jsonl)"]],"px",drawPx);
+ btns("rsBtns",[["d1_pct","1D Return (%)"],["vs_spy_1d_pp","1D vs SPY (pp)"],["d5_pct","5D Return (%)"],["d20_pct","20D Return (%)"]],"rs",drawRs)}
+const SCOPES=[["next_session",null],["upcoming_45d","Upcoming ≤45 DTE"],["monthly_opex","Monthly OPEX"],["upcoming_all","All Expiries"]];
+function scopeLabel(k){const g=S.gex_scopes[k]||{};const ex=g.expirations||[];if(k==="next_session")return (ex[0]?fmtD(ex[0]):"Next")+" (0DTE)";if(k==="monthly_opex")return "Monthly OPEX"+(ex[0]?" "+fmtD(ex[0]):"");return SCOPES.find(s=>s[0]===k)[1]}
+const wall=(g,k)=>(g[k]&&g[k][0])?g[k][0].strike:null;
+const zg=g=>g.zero_gamma_repriced_model&&g.zero_gamma_repriced_model.zero_gamma_level;
+function render(){
+ const sp=S.spy_detail||{},sm=S.summary||{},G=S.gex_scopes,g45=G.upcoming_45d,g0=G.next_session;
+ const vt=Object.fromEntries((S.volatility_table||[]).map(r=>[r.symbol,r]));const at=Object.fromEntries((S.assets_table||[]).map(r=>[r.symbol,r]));
+ // pills
+ const P=[];const ng=g45.totals.net_gex;P.push([ng<0?"neg":"pos",`${ng<0?"SHORT":"LONG"} GAMMA (${B(ng)} ≤45D)`]);
+ const v9=vt["^VIX9D"]?.close,v=vt["^VIX"]?.close,v3=vt["^VIX3M"]?.close;
+ if(v9!=null&&v!=null&&v3!=null){const bw=v9>v&&v>v3,ct=v9<v&&v<v3;P.push([bw?"neg":ct?"pos":"warn",`VIX ${bw?"BACKWARDATION":ct?"CONTANGO":"MIXED CURVE"} (${n(v9)} ${v9>v?">":"<"} ${n(v)} ${v>v3?">":"<"} ${n(v3)})`])}
+ if(sp.sma200!=null)P.push([sp.sma200_dist_dollars>=0?"pos":"neg",`200 SMA ${sp.sma200_dist_dollars>=0?"+":"-"}$${n(Math.abs(sp.sma200_dist_dollars))} (${pct(sp.sma200_dist_pct)})`]);
+ if(sp.rvol_20d!=null)P.push([sp.rvol_20d>=1.5?"warn":"",`RVOL ${n(sp.rvol_20d)}× 20D`]);
+ $("pills").innerHTML=P.map(([c,t])=>`<span class="pill ${c}">${t}</span>`).join("");
+ // KPIs
+ const node0=g0.node_735||{},node45=g45.node_735||{};const sox=at["^SOX"],nv=at["NVDA"],bkx=at["^BKX"];
+ const K8=[
+  ["SPY Regular Close",`$${n(sp.close)}`,`<span class="${cls(sp.d1_pct)}">${pct(sp.d1_pct)} (${sgn(sp.change_dollars)})</span> · Last $${n(sp.current_price)}`],
+  ["200-Day SMA",`$${n(sp.sma200)}`,`<span class="${cls(sp.sma200_dist_dollars)}">${sgn(sp.sma200_dist_dollars)} (${pct(sp.sma200_dist_pct)})</span> · 20D $${n(sp.sma20)} · 50D $${n(sp.sma50)}`],
+  ["Session Volume",`${n(sp.volume/1e6,1)}M`,`${n(sp.rvol_20d)}× 20D avg (${n(sp.vol_avg_20d/1e6,1)}M)`],
+  ["Net GEX ≤45 DTE",`<span class="${cls(ng)}">${B(ng)}</span>`,`Model zero-γ ≈ $${n(zg(g45))} · 0DTE ${B(g0.totals.net_gex)}`],
+  ["Primary Walls (by GEX)",`P $${n(wall(g45,"put_walls_by_gex"),0)} / C $${n(wall(g45,"call_walls_by_gex"),0)}`,`≤45D · 0DTE: P $${n(wall(g0,"put_walls_by_gex"),0)} / C $${n(wall(g0,"call_walls_by_gex"),0)}`],
+  ["$735 Strike Node",`<span class="${cls(node0.net_gex)}">${M(node0.net_gex)}</span>`,`0DTE net · ≤45D ${M(node45.net_gex)} · 0DTE put OI ${K(node0.put_oi)}`],
+  ["VIX & Term Structure",`${n(v)} <span class="${cls(vt["^VIX"]?.d1_pct)}" style="font-size:14px">${pct(vt["^VIX"]?.d1_pct,1)}</span>`,`9D ${n(v9)} · 3M ${n(v3)} · VVIX ${n(vt["^VVIX"]?.close)}`],
+  ["AI & KBW vs SPY (1D)",`<span class="${cls(sox?.vs_spy_1d_pp)}">^SOX ${sgn(sox?.vs_spy_1d_pp)}pp</span>`,`NVDA <span class="${cls(nv?.vs_spy_1d_pp)}">${sgn(nv?.vs_spy_1d_pp)}pp</span> · ^BKX <span class="${cls(bkx?.vs_spy_1d_pp)}">${sgn(bkx?.vs_spy_1d_pp)}pp</span>`]];
+ $("kpis").innerHTML=K8.map(([l,v,s])=>`<div class="card kpi"><div class="lbl">${l}</div><div class="val">${v}</div><div class="sub">${s}</div></div>`).join("");
+ btns("scopeBtns",SCOPES.map(([k])=>[k,scopeLabel(k)]),"scope",drawGex);
+ drawGex();drawScopeTbl();drawPx();drawNode();drawVix();drawRs();drawFut();drawNews()}
+function drawGex(){const g=S.gex_scopes[st.scope],sp=S.spy_detail,rows=g.strikes_700_810||[];const labels=rows.map(r=>r.strike);
+ const ds=st.mode==="net"?[{label:"Net GEX ($M)",data:rows.map(r=>r.net_gex/1e6),backgroundColor:rows.map(r=>r.strike===735?"#facc15":r.net_gex>=0?"#22c55e":"#f43f5e")}]
+  :[{label:"Call GEX ($M)",data:rows.map(r=>r.call_gex/1e6),backgroundColor:rows.map(r=>r.strike===735?"#facc15":"#22c55e"),stack:"s"},{label:"Put GEX ($M)",data:rows.map(r=>r.put_gex/1e6),backgroundColor:rows.map(r=>r.strike===735?"#eab308":"#f43f5e"),stack:"s"}];
+ const cw=wall(g,"call_walls_by_gex"),pw=wall(g,"put_walls_by_gex");const spot=S.gex_meta?.gex_spot??sp.current_price;
+ const lines=[{v:735,c:"#facc15",t:"$735 node",row:0},{v:sp.sma200,c:"#a78bfa",t:`200 SMA $${n(sp.sma200)}`,dash:[6,4],row:1},{v:spot,c:"#38bdf8",t:`Spot $${n(spot)}`,row:2},
+  cw&&{v:cw,c:"#22c55e",t:`Call wall $${cw}`,dash:[2,3],row:3},pw&&{v:pw,c:"#f43f5e",t:`Put wall $${pw}`,dash:[2,3],row:4}].filter(Boolean);
+ mk("gexChart",{type:"bar",data:{labels,datasets:ds},options:{maintainAspectRatio:false,animation:false,interaction:{mode:"index",intersect:false},
+  scales:{x:{stacked:st.mode!=="net",ticks:{autoSkip:true,maxRotation:0}},y:{stacked:st.mode!=="net",title:{display:true,text:"$M per 1% move"}}},
+  plugins:{legend:{display:st.mode!=="net"},vlines:{lines},tooltip:{callbacks:{title:i=>"Strike $"+i[0].label,afterBody:i=>{const r=rows[i[0].dataIndex];return[`Call OI ${K(r.call_oi)} · Put OI ${K(r.put_oi)}`,`Call Vol ${K(r.call_vol)} · Put Vol ${K(r.put_vol)}`]}}}}}});
+ $("gexNote").textContent=`${scopeLabel(st.scope)} · ${(g.expirations||[]).length} expiries · Net ${B(g.totals.net_gex)} · Model zero-γ ≈ $${n(zg(g))} · ${S.gex_meta?.dealer_assumption||""}`}
+function drawScopeTbl(){const h="<tr><th>Scope</th><th>Expiries</th><th>Net GEX</th><th>Call Wall</th><th>Put Wall</th><th>P/C OI</th><th>P/C Vol</th><th>Model Zero-γ</th></tr>";
+ $("scopeTbl").innerHTML=h+SCOPES.map(([k])=>{const g=S.gex_scopes[k],t=g.totals;return`<tr><td>${scopeLabel(k)}</td><td>${(g.expirations||[]).length}</td><td class="${cls(t.net_gex)}">${B(t.net_gex)}</td><td>$${n(wall(g,"call_walls_by_gex"),0)}</td><td>$${n(wall(g,"put_walls_by_gex"),0)}</td><td>${n(t.put_call_oi_ratio)}</td><td>${n(t.put_call_volume_ratio)}</td><td>${zg(g)!=null?"$"+n(zg(g)):"—"}</td></tr>`}).join("")}
+function drawPx(){const sp=S.spy_detail;$("logTblWrap").style.display="none";let note="";
+ if(st.px==="intraday"){const r=S.intraday_30m||[];
+  mk("pxChart",{type:"bar",data:{labels:r.map(x=>x.slot_ct+" CT"),datasets:[
+   {type:"line",label:"SPY 30m close",data:r.map(x=>x.close),borderColor:"#38bdf8",backgroundColor:"#38bdf8",yAxisID:"y",tension:.2,pointRadius:2,order:0},
+   {type:"line",label:"200 SMA",data:r.map(()=>sp.sma200),borderColor:"#a78bfa",borderDash:[6,4],pointRadius:0,yAxisID:"y",order:0},
+   {type:"line",label:"$735 node",data:r.map(()=>735),borderColor:"#facc15",borderDash:[3,3],pointRadius:0,yAxisID:"y",order:0},
+   {label:"Call vol (K)",data:r.map(x=>x.call_vol_k),backgroundColor:"rgba(34,197,94,.55)",yAxisID:"y2",stack:"v",order:1},
+   {label:"Put vol (K)",data:r.map(x=>x.put_vol_k),backgroundColor:"rgba(244,63,94,.55)",yAxisID:"y2",stack:"v",order:1}]},
+   options:{maintainAspectRatio:false,animation:false,interaction:{mode:"index",intersect:false},scales:{y:{position:"left",title:{display:true,text:"SPY $"}},y2:{position:"right",stacked:true,grid:{display:false},title:{display:true,text:"Options vol (K contracts)"}},x:{stacked:true}},
+   plugins:{tooltip:{callbacks:{afterBody:i=>{const x=r[i[0].dataIndex];return x?["Share vol "+n(x.stock_vol_m,2)+"M"]:[]}}}}}});
+  note=r.length?`Session ${S.session_date} · ${r.length} × 30-minute CT buckets (Cboe 1-min intraday, bucket close + summed volume).`:"No intraday data in this snapshot."}
+ else if(st.px==="daily"){const r=S.daily_15d||[];
+  mk("pxChart",{type:"bar",data:{labels:r.map(x=>fmtD(x.date)),datasets:[
+   {type:"line",label:"SPY close",data:r.map(x=>x.close),borderColor:"#38bdf8",yAxisID:"y",tension:.15,order:0},
+   {type:"line",label:"20D SMA",data:r.map(x=>x.sma20),borderColor:"#f59e0b",borderDash:[4,3],pointRadius:0,yAxisID:"y",order:0},
+   {type:"line",label:"200D SMA",data:r.map(x=>x.sma200),borderColor:"#a78bfa",borderDash:[6,4],pointRadius:0,yAxisID:"y",order:0},
+   {type:"line",label:"$735 node",data:r.map(()=>735),borderColor:"#facc15",borderDash:[3,3],pointRadius:0,yAxisID:"y",order:0},
+   {label:"Share vol (M)",data:r.map(x=>x.volume_m),backgroundColor:"rgba(148,163,184,.35)",yAxisID:"y2",order:1}]},
+   options:{maintainAspectRatio:false,animation:false,interaction:{mode:"index",intersect:false},scales:{y:{title:{display:true,text:"SPY $"}},y2:{position:"right",grid:{display:false},title:{display:true,text:"Volume (M shares)"}}}}});
+  note=`Last ${r.length} completed sessions (Yahoo Finance daily, unadjusted close; SMAs computed from closes).`}
+ else{const r=LOG||[];const lab=r.map(x=>new Date(x.timestamp_utc).toLocaleString("en-US",{timeZone:"America/Chicago",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}));
+  mk("pxChart",{type:"line",data:{labels:lab,datasets:[
+   {label:"SPY price",data:r.map(x=>x.spy_price),borderColor:"#38bdf8",backgroundColor:"#38bdf8",yAxisID:"y",pointRadius:5},
+   {label:"Net GEX ≤45D ($B)",data:r.map(x=>x.net_gex_45d_dollars/1e9),borderColor:"#f43f5e",backgroundColor:"#f43f5e",yAxisID:"y2",pointRadius:5},
+   {label:"VIX",data:r.map(x=>x.vix),borderColor:"#f59e0b",backgroundColor:"#f59e0b",yAxisID:"y3",pointRadius:5}]},
+   options:{maintainAspectRatio:false,animation:false,interaction:{mode:"index",intersect:false},scales:{y:{title:{display:true,text:"SPY $"}},y2:{position:"right",grid:{display:false},title:{display:true,text:"GEX $B"}},y3:{position:"right",grid:{display:false},title:{display:true,text:"VIX"}}}}});
+  note=r.length===1?"1 baseline point logged so far — the time series grows with every hourly (8:00 AM–3:00 PM CT) and post-close run.":`${r.length} logged runs (CT).`;
+  $("logTblWrap").style.display="block";
+  $("logTbl").innerHTML="<tr><th>Time (CT)</th><th>Tag</th><th>SPY</th><th>1D</th><th>Net GEX ≤45D</th><th>0DTE Net</th><th>Walls ≤45D (P/C)</th><th>VIX</th><th>200 SMA dist</th></tr>"+r.slice().reverse().map((x,i)=>`<tr><td>${lab[r.length-1-i]}</td><td>${x.run_tag}</td><td>$${n(x.spy_price)}</td><td class="${cls(x.spy_1d_pct)}">${pct(x.spy_1d_pct)}</td><td class="${cls(x.net_gex_45d_dollars)}">${B(x.net_gex_45d_dollars)}</td><td class="${cls(x.net_gex_0dte_dollars)}">${B(x.net_gex_0dte_dollars)}</td><td>$${n(x.put_wall_45d,0)} / $${n(x.call_wall_45d,0)}</td><td>${n(x.vix)}</td><td>${sgn(x.spy_sma_200_dist_dollars)} (${pct(x.spy_sma_200_dist_pct)})</td></tr>`).join("")}
+ $("pxNote").textContent=note}
+function drawNode(){const rows=SCOPES.map(([k])=>[scopeLabel(k),S.gex_scopes[k].node_735||{}]);
+ $("nodeTbl").innerHTML="<tr><th>Scope</th><th>Net GEX</th><th>Call GEX</th><th>Put GEX</th><th>Call OI</th><th>Put OI</th><th>Call Vol</th><th>Put Vol</th></tr>"+rows.map(([l,x])=>`<tr><td>${l}</td><td class="${cls(x.net_gex)}">${M(x.net_gex)}</td><td>${M(x.call_gex)}</td><td>${M(x.put_gex)}</td><td>${K(x.call_oi)}</td><td>${K(x.put_oi)}</td><td>${K(x.call_volume)}</td><td>${K(x.put_volume)}</td></tr>`).join("")}
+function drawVix(){const r=S.volatility_table||[];const tenor=r.filter(x=>x.symbol!=="^VVIX");
+ mk("vixChart",{type:"bar",data:{labels:tenor.map(x=>x.symbol+" ("+x.label+")"),datasets:[{label:"Close",data:tenor.map(x=>x.close),backgroundColor:["#f43f5e","#f59e0b","#38bdf8"]},{label:"20D SMA",data:tenor.map(x=>x.sma20),backgroundColor:"rgba(148,163,184,.4)"}]},options:{maintainAspectRatio:false,animation:false}});
+ $("vixTbl").innerHTML="<tr><th>Index</th><th>Close</th><th>1D</th><th>20D SMA</th></tr>"+r.map(x=>`<tr><td>${x.symbol} <span class="mut">${x.label}</span></td><td>${n(x.close)}</td><td class="${cls(x.d1_pct)}">${pct(x.d1_pct,1)}</td><td>${n(x.sma20)}</td></tr>`).join("");
+ const t=S.vol_term_structure||{};$("vixNote").textContent=t.regime?`VIX/VIX3M ${n(t.vix_over_vix3m,3)} · VIX9D−VIX ${sgn(t.vix9d_minus_vix)} · ${t.regime.replace(/_/g," ")} (${t.note||""})`:""}
+function drawRs(){const k=st.rs;const r=(S.assets_table||[]).slice().sort((a,b)=>(b[k]??-1e9)-(a[k]??-1e9));
+ mk("rsChart",{type:"bar",data:{labels:r.map(x=>x.symbol),datasets:[{label:{d1_pct:"1D %",vs_spy_1d_pp:"1D vs SPY (pp)",d5_pct:"5D %",d20_pct:"20D %"}[k],data:r.map(x=>x[k]),backgroundColor:r.map(x=>x.symbol==="SPY"?"#38bdf8":x[k]>=0?"#22c55e":"#f43f5e")}]},options:{indexAxis:"y",maintainAspectRatio:false,animation:false,plugins:{legend:{display:false}}}});
+ drawRsTbl()}
+const RSC=[["symbol","Symbol"],["close","Close"],["d1_pct","1D %"],["d5_pct","5D %"],["d20_pct","20D %"],["vs_spy_1d_pp","1D vs SPY"],["rvol_20d","Rel Vol"],["sma200_dist_pct","200 SMA & Dist"]];
+function drawRsTbl(){let r=(S.assets_table||[]).slice();const k=st.sortK||st.rs;r.sort((a,b)=>{const x=a[k],y=b[k];if(typeof x==="string")return st.sortDir*(y<x?-1:1)*-1;return st.sortDir*((x??-1e9)-(y??-1e9))});
+ $("rsTbl").innerHTML="<tr>"+RSC.map(([c,l])=>`<th class="sort" data-k="${c}">${l}${k===c?(st.sortDir<0?" ▼":" ▲"):""}</th>`).join("")+"</tr>"+r.map(x=>`<tr class="${x.symbol==="SPY"?"hl":""}"><td>${x.symbol}</td><td>${n(x.close)}</td><td class="${cls(x.d1_pct)}">${pct(x.d1_pct)}</td><td class="${cls(x.d5_pct)}">${pct(x.d5_pct)}</td><td class="${cls(x.d20_pct)}">${pct(x.d20_pct)}</td><td class="${cls(x.vs_spy_1d_pp)}">${sgn(x.vs_spy_1d_pp)}pp</td><td>${x.rvol_20d!=null?n(x.rvol_20d)+"×":"—"}</td><td>${n(x.sma200)} <span class="${cls(x.sma200_dist_pct)}">(${pct(x.sma200_dist_pct)})</span></td></tr>`).join("");
+ [...$("rsTbl").querySelectorAll("th.sort")].forEach(th=>th.onclick=()=>{const c=th.dataset.k;if((st.sortK||st.rs)===c)st.sortDir*=-1;else{st.sortK=c;st.sortDir=-1}drawRsTbl()})}
+function drawFut(){const r=S.futures_table||[];const nm={"ES=F":"/ES","NQ=F":"/NQ","RTY=F":"/RTY"};
+ $("futTbl").innerHTML="<tr><th>Contract</th><th>Quote</th><th>Time (CT)</th><th>vs Ref</th><th>RTH/Daily Close</th><th>O/N vs Close</th><th>O/N Range</th><th>Prior Range</th></tr>"+r.map(x=>`<tr><td>${nm[x.symbol]||x.symbol}</td><td>${n(x.quote)}</td><td>${(x.timestamp_ct||"").replace(/^\d{4}-/,"")}</td><td class="${cls(x.vs_ref_dollars)}">${sgn(x.vs_ref_dollars)} (${pct(x.vs_ref_pct,3)})</td><td>${n(x.rth_close)}</td><td class="${cls(x.overnight_vs_close_pct)}">${pct(x.overnight_vs_close_pct,3)}</td><td>${n(x.overnight_range[0])}–${n(x.overnight_range[1])}</td><td>${n(x.prior_range[0])}–${n(x.prior_range[1])}</td></tr>`).join("")}
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function drawNews(){const r=S.verified_headlines||[];$("news").innerHTML=r.length?r.map(h=>`<li><a href="${esc(h.url)}" target="_blank" rel="noopener">${esc(h.title)}</a><div class="meta">${esc(h.published||h.session)}${h.source?" · "+esc(h.source):""}</div>${h.summary?`<div style="font-size:13px;margin-top:3px">${esc(h.summary)}</div>`:""}</li>`).join(""):'<li class="mut">No verified headlines in this snapshot.</li>'}
+$("openMd").onclick=async e=>{e.preventDefault();$("drawer").classList.add("open");$("md").textContent="Loading…";
+ try{const t=await (await fetch($("lnkMd").getAttribute("href"),{cache:"no-cache"})).text();$("md").innerHTML=typeof marked!=="undefined"?marked.parse(t):"<pre>"+esc(t)+"</pre>";$("md").querySelectorAll("a").forEach(a=>{a.target="_blank";a.rel="noopener"})}catch(x){$("md").textContent="Failed to load report: "+x.message}};
+$("closeMd").onclick=()=>$("drawer").classList.remove("open");$("drawer").onclick=e=>{if(e.target.id==="drawer")$("drawer").classList.remove("open")};
+document.addEventListener("keydown",e=>{if(e.key==="Escape")$("drawer").classList.remove("open")});
+init().catch(e=>err(e.message));
+</script></body></html>
