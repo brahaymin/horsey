@@ -91,9 +91,11 @@ def safe_get(d, *keys, default=None):
 
 
 def ensure_repo():
+    tar_backup = os.path.join(STORE_ROOT, "horsey_repo_backup.tar.gz")
     if not os.path.exists(os.path.join(REPO_DIR, ".git")):
-        if os.path.exists(os.path.join(STORE_REPO_DIR, ".git")):
-            shutil.copytree(STORE_REPO_DIR, REPO_DIR, dirs_exist_ok=True)
+        if os.path.exists(tar_backup):
+            os.makedirs(REPO_DIR, exist_ok=True)
+            subprocess.run(["tar", "-xzf", tar_backup, "-C", "/workspace"], check=True)
         else:
             subprocess.run(["git", "clone", "https://github.com/brahaymin/horsey.git", REPO_DIR], check=True)
     subprocess.run(["git", "config", "user.name", "SPY Gamma Structure Monitor"], cwd=REPO_DIR, check=True)
@@ -303,9 +305,8 @@ def main():
         sp = os.path.join("/workspace", fn)
         if os.path.exists(sp):
             shutil.copyfile(sp, os.path.join(STORE_ROOT, fn))
-    if os.path.exists(STORE_REPO_DIR):
-        shutil.rmtree(STORE_REPO_DIR)
-    shutil.copytree(REPO_DIR, STORE_REPO_DIR)
+    tar_backup = os.path.join(STORE_ROOT, "horsey_repo_backup.tar.gz")
+    subprocess.run(["tar", "-czf", tar_backup, "-C", "/workspace", "horsey"], check=True)
 
     # Push via gh/git if gh CLI is authenticated
     gh_check = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True)
