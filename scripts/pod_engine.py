@@ -16,6 +16,7 @@ Subcommands:
   alpaca-sync         Alias of alpaca-status (refresh sanitized paper state)
   alpaca-find-option  Resolve OCC option symbol (offline OCC math; live quote if keys set)
   alpaca-stage-ticket Build/validate Alpaca Paper order from blotter ticket (--dry-run / --submit-paper)
+  alpaca-rth-tick     RTH trigger check + OCO management for conditional_preapproved paper tickets
 """
 import argparse, json, math, os, sys, uuid, urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,7 @@ P = lambda *a: os.path.join(ROOT, *a)
 LATEST, ROSTER, SCORE = P("latest.json"), P("pod", "roster.json"), P("pod", "scorecard.json")
 STATE, SIGLOG, BLOTTER = P("pod", "signals", "latest_pod_state.json"), P("pod", "ledger", "signals_log.jsonl"), P("pod", "ledger", "paper_blotter.jsonl")
 PAPER_STATE, PAPER_ORDERS = P("pod", "paper_account_state.json"), P("pod", "ledger", "alpaca_paper_orders.jsonl")
+PAPER_EVENTS = P("pod", "paper_execution_events.json")
 TS = P("history", "timeseries.jsonl")
 REGIMES = ("short_gamma_backwardation", "positive_gamma_contango", "below_200sma")
 PTJ_ID = "05895e3e-1c82-4cec-9ff3-07aa73b5c0db"
@@ -992,6 +994,14 @@ def main(argv=None):
     astg.add_argument("--expiration")
     astg.add_argument("--strike", type=float)
     astg.add_argument("--occ-symbol")
+
+    art = sp.add_parser("alpaca-rth-tick", help="RTH auto-exec tick for conditional_preapproved Alpaca Paper tickets")
+    art.add_argument("--force-sim", action="store_true",
+                     help="Dry evaluate triggers; NEVER submit paper/live orders unless real RTH conditions already hold (still never transmits when force-sim)")
+    art.add_argument("--push-if-changed", action="store_true",
+                     help="Rebuild vault/state.enc.json and git push when execution state changes")
+    art.add_argument("--ensure-watcher", action="store_true",
+                     help="Spawn alpaca_rth_watcher.py detached if RTH window and lock free")
     a = ap.parse_args(argv)
     if a.cmd in ("status", "log-signal", "grade"):
         _housekeeping()
@@ -1047,6 +1057,21 @@ def main(argv=None):
         )
         print(json.dumps(result, indent=2)); maybe_rebuild_vault_state()
         return 0
+    elif a.cmd == "alpaca-rth-tick":
+        import importlib.util
+        _spec = importlib.util.spec_from_file_location("_alpaca_rth", P("scripts", "_alpaca_rth.py"))
+        rth = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(rth)
+        pe = sys.modules[__name__]
+        result = rth.alpaca_rth_tick(
+            pe,
+            force_sim=bool(getattr(a, "force_sim", False)),
+            push_if_changed=bool(getattr(a, "push_if_changed", False)),
+            ensure_watcher_flag=bool(getattr(a, "ensure_watcher", False)),
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+
     return 0
     return 0
 

@@ -197,6 +197,7 @@ def collect_state_files() -> dict:
         "pod/ledger/signals_log.jsonl",
         "pod/ledger/signals.jsonl",
         "pod/paper_account_state.json",
+        "pod/paper_execution_events.json",
         "pod/alpaca_last_dry_run.json",
         "pod/state.json",  # optional alias some UIs expect
     ]
