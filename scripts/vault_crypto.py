@@ -298,11 +298,13 @@ def collect_state_files() -> dict:
     if isinstance(mi, dict):
         for m in mi.get("memos") or []:
             path = m.get("path")
+            if path and str(path).startswith("snapshots/"):
+                continue  # older snapshot reports load on demand from vault/snapshots/
             if path:
                 add_text(path, ROOT / path) if str(path).endswith(".md") else add_json(path, ROOT / path)
         # latest_cio_briefing
         lcb = mi.get("latest_cio_briefing")
-        if lcb:
+        if lcb and not str(lcb).startswith("snapshots/"):
             add_text(lcb, ROOT / lcb)
 
     if pod.exists():

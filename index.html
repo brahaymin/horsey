@@ -189,6 +189,25 @@ async function refreshStateIfNeeded(force){
     return true;
   } catch(e){ return false; }
 }
+const ON_DEMAND_INFLIGHT = Object.create(null);
+async function fetchOnDemandSnapshot(path){
+  // Historical snapshots are immutable: encrypted per-file under vault/snapshots/<path>.enc.json
+  if (!/^snapshots\/[A-Za-z0-9_./-]+\.(json|md)$/.test(path) || path.includes("..")) return null;
+  if (ON_DEMAND_INFLIGHT[path]) return ON_DEMAND_INFLIGHT[path];
+  const p = (async () => {
+    try {
+      const r = await nativeFetch("./vault/" + path + ".enc.json", { cache:"force-cache" });
+      if (!r.ok) return null;
+      const env = await r.json();
+      const txt = await decryptEnvelope(activeKey, env);
+      VAULT_FILES[path] = txt;
+      return txt;
+    } catch(e){ return null; }
+    finally { delete ON_DEMAND_INFLIGHT[path]; }
+  })();
+  ON_DEMAND_INFLIGHT[path] = p;
+  return p;
+}
 function installFetchWrapper(){
   window.fetch = async function(input, init){
     try {
@@ -201,6 +220,10 @@ function installFetchWrapper(){
         let body = VAULT_FILES[path];
         if (typeof body !== "string") body = JSON.stringify(body);
         return new Response(body, { status:200, headers:{ "Content-Type": guessType(path), "X-Horsey-Vault":"1" }});
+      }
+      if (path.startsWith("snapshots/") && activeKey) {
+        const body = await fetchOnDemandSnapshot(path);
+        if (body != null) return new Response(body, { status:200, headers:{ "Content-Type": guessType(path), "X-Horsey-Vault":"on-demand" }});
       }
       return new Response(JSON.stringify({ error:"not_in_vault", path }), { status:404, headers:{ "Content-Type":"application/json" }});
     } catch(e) {
