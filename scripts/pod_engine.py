@@ -378,15 +378,16 @@ MEMO_SOURCES = [
     ("pod/ptj_macro", "_thesis.md", "ptj", "PTJ Macro & Regime", "PTJ Macro & Regime Strategist"),
     ("pod/intraday_tape_gamma", "_thesis.md", "intraday", "Intraday Tape & Gamma", "Intraday Tape & Gamma Tactician"),
     ("pod/buffett_value", "_thesis.md", "buffett", "Buffett Value Compounder", "Buffett Value Compounder"),
+    ("pod/income_sleeve", "_income_sleeve.md", "income_sleeve", "Income Sleeve (Robinhood)", "Buffett Value Compounder"),
 ]
-ROLE_ORDER = ["cio", "ptj", "intraday", "buffett", "gamma_data"]
+ROLE_ORDER = ["cio", "ptj", "intraday", "buffett", "income_sleeve", "gamma_data"]
 
 
 def _memo_meta(rel, role, label, agent):
     import re
     full = P(rel)
     base = os.path.basename(rel)
-    m = re.match(r"(\d{4}-\d{2}-\d{2})[_-](\d{2})(\d{2})-ct-?([a-z0-9-]*?)(?:_thesis|_cio_briefing)?\.md$", base)
+    m = re.match(r"(\d{4}-\d{2}-\d{2})[_-](\d{2})(\d{2})-ct-?([a-z0-9-]*?)(?:_thesis|_cio_briefing|_income_sleeve)?\.md$", base)
     if role == "gamma_data":
         parts = rel.split("/")  # snapshots/YYYY/MM/DD/HHMM-ct-tag.md
         m2 = re.match(r"(\d{2})(\d{2})-ct-?(.*)\.md$", parts[-1])
@@ -962,6 +963,276 @@ def maybe_rebuild_vault_state():
         print(f"vault build-state skipped: {e}", file=sys.stderr)
 
 
+# ---------------------------------------------------------------- Robinhood Income Sleeve (read-only)
+INCOME_SLEEVE_DIR = P("pod", "income_sleeve")
+INCOME_SLEEVE_HOLDINGS = P("pod", "income_sleeve", "holdings_snapshot.json")
+
+_INCOME_SLEEVE_INVARIANTS = {
+    "mode": "monitoring_and_recommendation_only",
+    "automated_trading": False,
+}
+
+
+def _income_sleeve_default():
+    return {
+        "updated_at": iso_ct(),
+        "updated_at_ct": iso_ct(),
+        "status": "awaiting_holdings_snapshot",
+        "data_source_plan": (
+            "Manual CSV / holdings snapshot now; read-only Robinhood MCP connector "
+            "[plugin 68492778] once Agentic/read access is connected"
+        ),
+        "mode": "monitoring_and_recommendation_only",
+        "automated_trading": False,
+        "purpose": (
+            "Covered-call ETFs & dividend vehicles funded by trading proceeds to generate "
+            "income and pay down student debt"
+        ),
+        "positions": [],
+        "options_overlay": [],
+        "earmarked_trading_proceeds_usd": 0.0,
+        "missing_inputs_needed": [
+            "Current Robinhood share/ETF tickers, share counts, cost basis, and trailing distribution yields",
+            "Any active short covered-call legs (strike, expiration, premium collected)",
+            "Optional target monthly student-debt payment amount for cash-flow coverage tracking",
+        ],
+    }
+
+
+def _enforce_income_sleeve_invariants(doc: dict) -> dict:
+    doc = dict(doc or {})
+    doc["mode"] = "monitoring_and_recommendation_only"
+    doc["automated_trading"] = False
+    if "updated_at_ct" not in doc and "updated_at" in doc:
+        doc["updated_at_ct"] = doc["updated_at"]
+    return doc
+
+
+def load_income_sleeve_holdings() -> dict:
+    doc = rj(INCOME_SLEEVE_HOLDINGS, None)
+    if not isinstance(doc, dict):
+        doc = _income_sleeve_default()
+        os.makedirs(INCOME_SLEEVE_DIR, exist_ok=True)
+        wj(INCOME_SLEEVE_HOLDINGS, _enforce_income_sleeve_invariants(doc))
+    return _enforce_income_sleeve_invariants(doc)
+
+
+def income_sleeve_status(import_csv: str | None = None) -> dict:
+    """Read-only status summary; optionally import a CSV first (still recommendation-only)."""
+    if import_csv:
+        import_income_sleeve_csv(import_csv)
+    doc = load_income_sleeve_holdings()
+    # Non-mutating glance at paper earmarks if present
+    paper = rj(PAPER_STATE, {}) or {}
+    earmarked = float(doc.get("earmarked_trading_proceeds_usd") or 0.0)
+    summary = {
+        "status": doc.get("status"),
+        "mode": doc.get("mode"),
+        "automated_trading": bool(doc.get("automated_trading")),
+        "positions_count": len(doc.get("positions") or []),
+        "options_overlay_count": len(doc.get("options_overlay") or []),
+        "earmarked_trading_proceeds_usd": earmarked,
+        "missing_inputs_needed": doc.get("missing_inputs_needed") or [],
+        "updated_at": doc.get("updated_at") or doc.get("updated_at_ct"),
+        "purpose": doc.get("purpose"),
+        "paper_account_status": paper.get("status"),
+        "data_source_plan": doc.get("data_source_plan"),
+    }
+    return summary
+
+
+def _find_csv_col(cols, candidates):
+    lower = {c.lower().strip(): c for c in cols}
+    for name in candidates:
+        if name.lower() in lower:
+            return lower[name.lower()]
+    return None
+
+
+def _parse_occ_desc(text: str):
+    """Parse OCC or Robinhood-style option description into overlay fields."""
+    import re
+    if not text:
+        return None
+    s = str(text).strip()
+    m = re.match(r"^([A-Z]{1,6})(\d{6})([CP])(\d{8})$", s.replace(" ", "").upper())
+    if m:
+        from datetime import datetime as _dt
+        und, ymd, cp, strike = m.group(1), m.group(2), m.group(3), int(m.group(4)) / 1000.0
+        try:
+            exp = _dt.strptime(ymd, "%y%m%d").date().isoformat()
+        except Exception:
+            exp = ymd
+        return {
+            "underlying": und,
+            "expiration": exp,
+            "option_type": "call" if cp == "C" else "put",
+            "strike": strike,
+            "occ_symbol": f"{und}{ymd}{cp}{m.group(4)}",
+            "side": "short",
+            "quantity": None,
+            "premium_collected": None,
+        }
+    # e.g. "SPY 11/06/2026 Call $733.00" or "JEPI 01/16/2026 Call 55.0"
+    m2 = re.search(
+        r"([A-Z]{1,6}).*?(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}).*?\b(Call|Put)\b.*?\$?(\d+(?:\.\d+)?)",
+        s, re.I,
+    )
+    if m2:
+        from datetime import datetime as _dt
+        und = m2.group(1).upper()
+        raw_exp = m2.group(2).replace("-", "/")
+        for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+            try:
+                exp = _dt.strptime(raw_exp, fmt).date().isoformat()
+                break
+            except Exception:
+                exp = raw_exp
+        return {
+            "underlying": und,
+            "expiration": exp,
+            "option_type": m2.group(3).lower(),
+            "strike": float(m2.group(4)),
+            "occ_symbol": None,
+            "side": "short",
+            "quantity": None,
+            "premium_collected": None,
+        }
+    return None
+
+
+def import_income_sleeve_csv(csv_path: str) -> dict:
+    """Parse Robinhood activity/holdings CSV read-only; never stages orders."""
+    import csv as _csv
+    import re
+    p = csv_path if hasattr(csv_path, "exists") else __import__("pathlib").Path(csv_path)
+    if not p.exists():
+        raise SystemExit(f"income-sleeve CSV not found: {csv_path}")
+    with p.open(newline="", encoding="utf-8-sig", errors="replace") as f:
+        sample = f.read(4096)
+        f.seek(0)
+        try:
+            dialect = _csv.Sniffer().sniff(sample, delimiters=",\t")
+        except Exception:
+            dialect = _csv.excel
+        reader = _csv.DictReader(f, dialect=dialect)
+        rows = list(reader)
+        cols = reader.fieldnames or []
+
+    sym_col = _find_csv_col(cols, ["Symbol", "Ticker", "Instrument", "symbol", "chain_symbol"])
+    qty_col = _find_csv_col(cols, ["Shares", "Quantity", "Qty", "Share Count", "processed_quantity"])
+    cost_col = _find_csv_col(cols, ["Avg Cost", "Average Cost", "Cost Basis", "Average Price", "Price", "cost_basis"])
+    yield_col = _find_csv_col(cols, ["Yield", "Trailing Yield", "Distribution Yield", "Div Yield"])
+    action_col = _find_csv_col(cols, ["Trans Code", "Side", "Action", "action", "direction"])
+    amount_col = _find_csv_col(cols, ["Amount", "amount", "Notional"])
+    exp_col = _find_csv_col(cols, ["Expiration", "expiration", "expiration_date", "exp_date"])
+    strike_col = _find_csv_col(cols, ["Strike", "strike", "strike_price"])
+    opt_col = _find_csv_col(cols, ["Option Type", "option_type", "type", "put_call"])
+
+    positions = {}
+    overlay = []
+    for row in rows:
+        raw_sym = (row.get(sym_col) or "").strip() if sym_col else ""
+        if not raw_sym:
+            continue
+        action = (row.get(action_col) or "").strip().upper() if action_col else ""
+        qty_raw = (row.get(qty_col) or "").replace(",", "").strip() if qty_col else ""
+        try:
+            qty = float(qty_raw) if qty_raw else 0.0
+        except Exception:
+            qty = 0.0
+        # Option row?
+        occ = _parse_occ_desc(raw_sym)
+        looks_option = bool(occ) or bool(opt_col and (row.get(opt_col) or "").strip()) or bool(strike_col and (row.get(strike_col) or "").strip())
+        if looks_option:
+            leg = occ or {
+                "underlying": re.sub(r"[^A-Z].*", "", raw_sym.upper()) or raw_sym.upper(),
+                "expiration": (row.get(exp_col) or "").strip() if exp_col else None,
+                "option_type": ((row.get(opt_col) or "call").strip().lower()) if opt_col else "call",
+                "strike": float(str(row.get(strike_col)).replace("$", "").replace(",", "") or 0) if strike_col and row.get(strike_col) else None,
+                "occ_symbol": raw_sym if re.match(r"^[A-Z]{1,6}\d{6}[CP]\d{8}$", raw_sym.replace(" ", "").upper()) else None,
+                "side": "short",
+                "quantity": None,
+                "premium_collected": None,
+            }
+            # Short opens: STO / SELL (covered call)
+            if action in ("STO", "SELL", "SSC") or not action:
+                leg["side"] = "short"
+            elif action in ("BTC", "BUY", "BTO"):
+                leg["side"] = "long"
+            if qty:
+                leg["quantity"] = abs(qty)
+            if amount_col and row.get(amount_col):
+                try:
+                    leg["premium_collected"] = abs(float(str(row.get(amount_col)).replace("$", "").replace(",", "")))
+                except Exception:
+                    pass
+            # Only retain short call overlays for the income sleeve watch
+            if (leg.get("option_type") or "call").startswith("c") and leg.get("side") == "short":
+                overlay.append(leg)
+            continue
+
+        # Equity / ETF holdings
+        ticker = raw_sym.upper().split()[0]
+        if ticker in ("USD", "CASH"):
+            continue
+        cost = None
+        if cost_col and row.get(cost_col):
+            try:
+                cost = float(str(row.get(cost_col)).replace("$", "").replace(",", ""))
+            except Exception:
+                cost = None
+        yld = None
+        if yield_col and row.get(yield_col):
+            try:
+                yld = float(str(row.get(yield_col)).replace("%", "").replace(",", ""))
+            except Exception:
+                yld = None
+        # Activity CSVs: net BUY/SELL into a running qty; holdings CSVs: absolute shares
+        signed = qty
+        if action in ("SELL", "STC", "STO"):
+            signed = -abs(qty)
+        elif action in ("BUY", "BTO", "BTC"):
+            signed = abs(qty)
+        elif not action:
+            signed = abs(qty)
+        pos = positions.setdefault(ticker, {"ticker": ticker, "shares": 0.0, "avg_cost": cost, "trailing_yield_pct": yld})
+        if action:
+            pos["shares"] = float(pos.get("shares") or 0.0) + signed
+        else:
+            pos["shares"] = float(signed or pos.get("shares") or 0.0)
+        if cost is not None:
+            pos["avg_cost"] = cost
+        if yld is not None:
+            pos["trailing_yield_pct"] = yld
+
+    pos_list = [p for p in positions.values() if abs(float(p.get("shares") or 0.0)) > 1e-9]
+    for p in pos_list:
+        p["shares"] = round(float(p["shares"]), 6)
+
+    doc = load_income_sleeve_holdings()
+    doc["positions"] = pos_list
+    doc["options_overlay"] = overlay
+    doc["updated_at"] = iso_ct()
+    doc["updated_at_ct"] = doc["updated_at"]
+    doc["status"] = "holdings_loaded" if pos_list or overlay else "awaiting_holdings_snapshot"
+    if pos_list or overlay:
+        doc["missing_inputs_needed"] = [
+            x for x in (doc.get("missing_inputs_needed") or [])
+            if "tickers" not in x.lower() and "covered-call" not in x.lower()
+        ]
+        if not any("student-debt" in x.lower() for x in doc["missing_inputs_needed"]):
+            doc["missing_inputs_needed"].append(
+                "Optional target monthly student-debt payment amount for cash-flow coverage tracking"
+            )
+    doc["data_source_plan"] = f"Imported read-only CSV ({p.name}); monitoring & recommendation only"
+    doc = _enforce_income_sleeve_invariants(doc)
+    os.makedirs(INCOME_SLEEVE_DIR, exist_ok=True)
+    wj(INCOME_SLEEVE_HOLDINGS, doc)
+    return doc
+
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
@@ -984,7 +1255,14 @@ def main(argv=None):
     s.add_argument("--stance"); s.add_argument("--note"); s.add_argument("--tag", default="PAPER"); s.add_argument("--as-of")
     g = sp.add_parser("grade"); g.add_argument("--now")
     sp.add_parser("build-memos-index")
+    sp.add_parser("index-memos")  # alias of build-memos-index
     sp.add_parser("bridge-ledger")
+    iss = sp.add_parser("income-sleeve-status", help="Read-only Robinhood Income Sleeve status summary")
+    iss.add_argument("--import-csv", dest="import_csv", help="Optional read-only holdings/activity CSV to ingest first")
+    isc = sp.add_parser("income-sleeve-import-csv", help="Import Robinhood holdings/activity CSV (read-only; never trades)")
+    isc.add_argument("csv_path")
+    isc2 = sp.add_parser("import-income-sleeve-csv", help="Alias of income-sleeve-import-csv")
+    isc2.add_argument("csv_path")
     pq = sp.add_parser("post-questions"); pq.add_argument("file")
     # Alpaca Paper (hard-locked to paper-api.alpaca.markets)
     asp = sp.add_parser("alpaca-status", help="Refresh sanitized Alpaca Paper account state")
@@ -1041,9 +1319,26 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.cmd in ("status", "log-signal", "grade"):
         _housekeeping()
-    if a.cmd == "build-memos-index":
+    if a.cmd in ("build-memos-index", "index-memos"):
         idx = build_memos_index()
         print(f"memos_index.json: {idx['count']} memo(s) — " + ", ".join(f"{r['role']}={r['count']}" for r in idx["roles"]))
+        maybe_rebuild_vault_state()
+    elif a.cmd == "income-sleeve-status":
+        summary = income_sleeve_status(getattr(a, "import_csv", None))
+        print(json.dumps(summary, indent=2))
+        maybe_rebuild_vault_state()
+    elif a.cmd in ("income-sleeve-import-csv", "import-income-sleeve-csv"):
+        doc = import_income_sleeve_csv(a.csv_path)
+        print(json.dumps({
+            "ok": True,
+            "status": doc.get("status"),
+            "positions_count": len(doc.get("positions") or []),
+            "options_overlay_count": len(doc.get("options_overlay") or []),
+            "earmarked_trading_proceeds_usd": doc.get("earmarked_trading_proceeds_usd"),
+            "automated_trading": doc.get("automated_trading"),
+            "mode": doc.get("mode"),
+            "updated_at": doc.get("updated_at"),
+        }, indent=2))
         maybe_rebuild_vault_state()
     elif a.cmd == "post-questions":
         q = post_questions(a.file); print(f"posted {len(q['questions'])} question(s) as {q['prompt_set_id']}")

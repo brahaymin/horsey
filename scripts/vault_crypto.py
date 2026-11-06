@@ -221,6 +221,7 @@ def collect_state_files() -> dict:
         "pod/track_record/armed_rules_queue.json",
         "pod/track_record/rules_registry.json",
         "pod/alpaca_last_dry_run.json",
+        "pod/income_sleeve/holdings_snapshot.json",
         "pod/state.json",  # optional alias some UIs expect
     ]
     for rel in must:
