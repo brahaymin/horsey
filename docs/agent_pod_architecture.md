@@ -1,7 +1,7 @@
 # Horsey Agent Pod — CEO Architecture Manual
 
 > **Paper / Architecture Demo — Not Live Financial Advice.** All times Central Time (CT, America/Chicago).
-> Live dashboard: <https://brahaymin.github.io/horsey/#pod> · Engine: [`scripts/pod_engine.py`](../scripts/pod_engine.py) · Roster: [`pod/roster.json`](../pod/roster.json)
+> Live dashboard: <https://brahaymin.github.io/horsey/#pod> · **`pod/` is private** (gitignored on the public archive; present locally for CIO/specialists/Alpaca Paper state) · Engine: [`scripts/pod_engine.py`](../scripts/pod_engine.py) · Roster: [`pod/roster.json`](../pod/roster.json)
 
 ## 1. Executive Org Chart
 
@@ -60,7 +60,15 @@ Hesitation (like not firing the `$760` puts with the order ready) happens when t
     --entry 1.85 --stop 1.25 --time-stop "45m if no follow-through" --underlying 733 --stage-paper
   ```
   → VIX 28.18 halves risk to 0.25% = $125 → **2 contracts**, $120 actual risk, OCO stop 1.25, T1 3.65 (3R), T2 4.85 (5R), 45-min time stop, firewall 6/6 ✅.
-- **Stage 2 — Recommended next ($0 free API):** connect one broker API. **Alpaca** (free paper + live stocks & options API) is the fastest start; **Charles Schwab Developer API** or **Tradier** if you already hold accounts there; **Interactive Brokers TWS API** for the most coverage. Why these: **one free key gives BOTH real-time WebSocket quotes/options** (plugs straight into `js/feed-adapter.js` / `SPYGammaFeed.applyLiveTick`) **AND staged OCO bracket orders** — first in a free paper account to build the track record, then human-confirmed 1-click live staging (the CIO stages; you press confirm). Never give an agent unattended live-send rights.
+- **Stage 2 — Live today ($0 Alpaca Paper):** `pod_engine.py` paper-only rail (`https://paper-api.alpaca.markets` hard-locked; live `api.alpaca.markets` refused):
+  ```bash
+  python3 scripts/pod_engine.py alpaca-status          # → pod/paper_account_state.json (sanitized)
+  python3 scripts/pod_engine.py alpaca-find-option --underlying SPY --expiration 2026-11-06 --type put --strike 732
+  python3 scripts/pod_engine.py alpaca-stage-ticket --ticket-id TKT-ITT-2026-11-06-A --dry-run
+  # After human confirm + keys: add --submit-paper (PAPER host only)
+  ```
+  Dashboard: Data Source → **Alpaca Paper Live Stream** (IEX WebSocket) · Tab 6 **Alpaca Paper Broker Desk**. Env keys: `APCA_API_KEY_ID`/`APCA_API_SECRET_KEY` **or** `ALPACA_API_KEY`/`ALPACA_SECRET_KEY` (alpaca-mcp-server). `pod/` is gitignored on the public GitHub archive.
+- **Stage 2b — Optional other brokers:** **Alpaca** (free paper + live stocks & options API) is the fastest start; **Charles Schwab Developer API** or **Tradier** if you already hold accounts there; **Interactive Brokers TWS API** for the most coverage. Why these: **one free key gives BOTH real-time WebSocket quotes/options** (plugs straight into `js/feed-adapter.js` / `SPYGammaFeed.applyLiveTick`) **AND staged OCO bracket orders** — first in a free paper account to build the track record, then human-confirmed 1-click live staging (the CIO stages; you press confirm). Never give an agent unattended live-send rights.
 - **Stage 3 — Later:** auto-stage from approved tickets with hard daily loss limits and a kill switch.
 
 ### B. Deterministic Quant Auditor (`pod_engine.py grade` + `pod/scorecard.json`)

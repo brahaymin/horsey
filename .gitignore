@@ -1,0 +1,14 @@
+# Local secrets — never commit
+.env
+.env.*
+.env*
+.alpaca*
+*.alpaca
+!.env.example
+!.env.alpaca.example
+
+# Private multi-agent pod state (local only — not on public GitHub Pages archive)
+pod/
+
+__pycache__/
+*.py[cod]

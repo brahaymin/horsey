@@ -78,9 +78,7 @@ Free, zero-login interactive dashboard (GitHub Pages) with a historical snapshot
 
 **Docs:** [Day-trading methodologies & 50 mistakes](docs/day_trading_methodologies_and_50_mistakes.md) · [Live feed spec (`SPYGammaFeed`)](docs/live_feed_spec.md)
 
-**CEO Briefings:** [Latest CIO briefing](pod/cio_briefings/latest.md) · read every team memo in-app at [Tab 1 — Briefings & Team Memos](https://brahaymin.github.io/horsey/#briefings)
-
-**Agent Pod:** [CEO Architecture Manual](docs/agent_pod_architecture.md) · [Dashboard Tab 6 — Agent Pod & Blotter](https://brahaymin.github.io/horsey/#pod) · [`pod/roster.json`](pod/roster.json) · [`pod/scorecard.json`](pod/scorecard.json) · engine: `python3 scripts/pod_engine.py status|size-ticket|log-signal|grade` (paper / architecture demo — not financial advice)
+**CEO Briefings / Agent Pod:** [CEO Architecture Manual](docs/agent_pod_architecture.md) · [Dashboard Tab 1 — Briefings](https://brahaymin.github.io/horsey/#briefings) · [Tab 6 — Agent Pod & Blotter](https://brahaymin.github.io/horsey/#pod). The live `pod/` working directory is **private** (gitignored on this public archive) and is used locally by CIO/specialist agents + Alpaca Paper staging (`python3 scripts/pod_engine.py status|alpaca-status|alpaca-stage-ticket`). Paper / architecture demo — not financial advice.
 
 ## Repository Layout
 
@@ -489,7 +487,14 @@ def main():
                 subprocess.run([sys.executable, pod_engine, sub], cwd=REPO_DIR, check=False, timeout=60)
             except Exception as e:
                 print("pod_engine", sub, "failed:", e)
+    # Respect .gitignore (pod/ is private). Never `git add -f pod`.
     subprocess.run(["git", "add", "-A"], cwd=REPO_DIR, check=True)
+    # Safety: ensure nothing under pod/ was staged
+    staged = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=REPO_DIR, capture_output=True, text=True, check=False)
+    bad = [ln for ln in (staged.stdout or "").splitlines() if ln.startswith("pod/") or ln == "pod"]
+    if bad:
+        subprocess.run(["git", "reset", "HEAD", "--", "pod"], cwd=REPO_DIR, check=False)
+        print("WARNING: unstaged private pod/ paths:", bad)
     status = subprocess.run(["git", "status", "--porcelain"], cwd=REPO_DIR, capture_output=True, text=True, check=True)
     if status.stdout.strip():
         msg = f"SPY gamma snapshot {dt_ct.strftime('%Y-%m-%d %H:%M CT')} ({run_tag}: SPY ${spy_close:.2f}, 45D GEX {s_45d['totals']['net_gex']/1e9:.2f}B, VIX {flat_row['vix']})"

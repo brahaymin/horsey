@@ -159,6 +159,7 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
 </div></div>
 <main class="wrap">
 <div class="err" id="err"></div>
+<div class="note" id="podPrivateNote" style="display:none;margin-top:10px;padding:10px;border:1px dashed var(--warn);border-radius:10px;background:#2d1d06;color:#fde68a"></div>
 
 <!-- TIER 1: 3-second regime strip -->
 <section class="hero" id="hero">
@@ -280,6 +281,19 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
    <div><label>Time stop</label><input type="text" id="cTs" value="45m if no follow-through"></div>
    <div><label>VIX (auto) / drawdown</label><div class="row"><input type="number" id="cVix" step="0.01" style="flex:1"><label style="text-transform:none"><input type="checkbox" id="cDd"> DD</label></div></div>
   </div><div id="cOut" style="margin-top:10px"></div></div>
+ <div class="card" id="alpacaDesk" style="margin-top:12px;border-color:#10b981">
+  <div class="row" style="justify-content:space-between;gap:8px;flex-wrap:wrap">
+   <h2 style="margin:0">🏦 Alpaca Paper Broker Desk <span class="note">paper-api.alpaca.markets — Paper Only</span></h2>
+   <span class="pill" id="alpacaBadge">Awaiting Paper API Keys</span>
+  </div>
+  <div class="note" id="alpacaDeskNote" style="margin-top:6px">Synced from <code>pod/paper_account_state.json</code> (written by <code>pod_engine.py alpaca-status</code>). Browser may also refresh live if Paper keys are saved in Data Source.</div>
+  <div class="row" id="alpacaMetrics" style="gap:8px;margin-top:8px;flex-wrap:wrap"></div>
+  <div class="grid two" style="margin-top:10px">
+   <div><h2 style="margin:0 0 6px;font-size:12px">Open Paper Positions</h2><div class="tw"><table id="alpacaPos"><tr><td class="mut">No positions synced.</td></tr></table></div></div>
+   <div><h2 style="margin:0 0 6px;font-size:12px">Recent / Working Paper Orders</h2><div class="tw"><table id="alpacaOrd"><tr><td class="mut">No orders synced.</td></tr></table></div></div>
+  </div>
+  <div style="margin-top:10px"><h2 style="margin:0 0 6px;font-size:12px">Validated Alpaca Paper Payload Preview</h2><pre id="alpacaPreview" class="note" style="white-space:pre-wrap;background:#0b1220;padding:10px;border-radius:8px;max-height:220px;overflow:auto">Run locally: python3 scripts/pod_engine.py alpaca-stage-ticket --ticket-id TKT-ITT-2026-11-06-A --dry-run</pre></div>
+ </div>
  <div class="grid two" style="margin-top:12px">
   <div class="card"><h2 style="margin:0 0 8px">Self-Training Calibration Scorecard</h2><div class="tw"><table id="podScore"></table></div><div class="note" id="podScoreNote"></div></div>
   <div class="card"><h2 style="margin:0 0 8px">Paper Blotter</h2><div class="tw"><table id="podBlot"></table></div></div>
@@ -300,6 +314,13 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
  <label class="opt"><input type="radio" name="fm" value="github_archive"><span><b>Archive JSON</b> (GitHub)<br><span class="note">snapshots/index.json + snapshot JSON + history/timeseries.jsonl</span></span></label>
  <label class="opt"><input type="radio" name="fm" value="rest"><span><b>Custom REST Poll URL</b><br><span class="note">Full snapshot JSON (latest.json schema) or a tick object</span></span></label>
  <label class="opt"><input type="radio" name="fm" value="websocket"><span><b>Live WebSocket URL</b><br><span class="note">wss:// stream of ticks or {type:"snapshot",data}</span></span></label>
+ <label class="opt"><input type="radio" name="fm" value="alpaca_iex"><span><b>Alpaca Paper Live Stream (Free IEX WebSocket + GitHub GEX/Briefings)</b><br><span class="note">Connects to <code>wss://stream.data.alpaca.markets/v2/iex</code> with Paper keys stored ONLY in this browser's localStorage. Keeps hourly GEX archive polling in parallel. Paper host only — never live <code>api.alpaca.markets</code>.</span></span></label>
+ <div id="fmAlpacaBox" style="display:none;margin:8px 0;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)">
+  <div class="note" style="margin:0 0 8px">Keys stay in <code>localStorage["horsey_alpaca_paper"]</code> on this device only — never written to the repo. Browser CORS on <code>paper-api.alpaca.markets</code> allows REST; IEX WebSocket has no CORS restriction.</div>
+  <label for="fmAlpacaKey">Alpaca Paper Key ID (PK…)</label><input type="password" id="fmAlpacaKey" autocomplete="off" placeholder="PK…">
+  <label for="fmAlpacaSecret">Alpaca Paper Secret Key</label><input type="password" id="fmAlpacaSecret" autocomplete="off" placeholder="Secret">
+  <div class="row" style="margin-top:8px;gap:8px"><button type="button" id="fmAlpacaClear">Clear saved Paper keys</button><span class="note" id="fmAlpacaMsg"></span></div>
+ </div>
  <label for="fmRest">REST URL</label><input type="url" id="fmRest" placeholder="https://your-feed.example.com/spy-gamma.json">
  <label for="fmWs">WebSocket URL</label><input type="url" id="fmWs" placeholder="wss://your-feed.example.com/stream">
  <label for="fmPoll">Poll interval (seconds)</label><input type="number" id="fmPoll" min="5" value="60">
@@ -338,8 +359,12 @@ if(HAS_CHART)Chart.register(vlines,hlines);
 
 
 function cacheBust(u){const sep=String(u).includes("?")?"&":"?";return u+sep+"_cb="+Math.floor(Date.now()/15000)}
-async function getJSON(u){const r=await fetch(cacheBust(u),{cache:"no-store"});if(!r.ok)throw new Error(u+" → HTTP "+r.status);return r.json()}
-async function getTextCB(u){const r=await fetch(cacheBust(u),{cache:"no-store"});if(!r.ok)throw new Error(u+" → HTTP "+r.status);return r.text()}
+let POD_PRIVATE=false;
+function markPodPrivate(on){POD_PRIVATE=!!on;try{window.POD_PRIVATE=POD_PRIVATE}catch(e){}const n=$("podPrivateNote");if(!n)return;if(on){n.style.display="block";n.innerHTML="🔒 Pod directory is private (<code>pod/</code> gitignored on the public GitHub archive). Open against a local server or connect REST / Alpaca Paper in Data Source to use Briefings, CEO Decisions, and the Agent Pod desk. Market GEX snapshots still load normally."}else n.style.display="none"}
+async function getJSON(u,opts){const soft=opts&&opts.soft;const r=await fetch(cacheBust(u),{cache:"no-store"});if(!r.ok){if(soft)return null;throw new Error(u+" → HTTP "+r.status)}return r.json()}
+async function getTextCB(u,opts){const soft=opts&&opts.soft;const r=await fetch(cacheBust(u),{cache:"no-store"});if(!r.ok){if(soft)return null;throw new Error(u+" → HTTP "+r.status)}return r.text()}
+async function getPodJSON(u){const r=await fetch(cacheBust(u),{cache:"no-store"});if(r.status===404){markPodPrivate(true);return null}if(!r.ok)return null;markPodPrivate(false);return r.json()}
+async function getPodText(u){const r=await fetch(cacheBust(u),{cache:"no-store"});if(r.status===404){markPodPrivate(true);return null}if(!r.ok)return null;return r.text()}
 let IDX=null,S=null,LOG=null,CUR=0,MDTXT="",charts={},st={scope:"next_session",mode:"net",px:"intraday",rs:"d1_pct",sortK:null,sortDir:-1,tab:"briefings",mdRaw:false};
 const LIVE={};
 function btns(id,items,key,fn){const w=$(id);w.innerHTML="";items.forEach(([v,l])=>{const b=document.createElement("button");b.textContent=l;b.dataset.v=v;b.onclick=()=>{st[key]=v;[...w.children].forEach(x=>x.classList.toggle("on",x.dataset.v===v));fn()};if(st[key]===v)b.classList.add("on");w.appendChild(b)})}
@@ -514,7 +539,7 @@ function filterPb(){const q=$("pbq").value.trim().toLowerCase(),cat=$("pbcat").v
 $("pbq").oninput=filterPb;$("pbcat").onchange=filterPb;
 document.querySelectorAll("[data-jump]").forEach(b=>b.onclick=()=>{const el=document.getElementById(b.dataset.jump);if(el)scrollTo({top:el.getBoundingClientRect().top+scrollY-140,behavior:"smooth"})});
 /* ---------- render pipeline (UI side of the adapter) ---------- */
-function renderSnapshot(snap,meta){S=snap;meta=meta||{};
+function renderSnapshot(snap,meta){S=snap;meta=meta||{};try{const sum=S.summary||{},prev=sum.spy_previous_close||sum.spy_prev_close||(S.spy_detail&&S.spy_detail.previous_close);const close=sum.spy_regular_close||sum.spy_price;if(window.SPYGammaFeed&&SPYGammaFeed.setPriorClose)SPYGammaFeed.setPriorClose(prev||close)}catch(e){}
  $("lnkMd").href=$("lnkMd2").href=S.md_rel_path||meta.md_path||"latest.md";$("lnkJson").href=meta.json_path||"latest.json";
  $("asof").textContent=(meta.display_ct||S.timestamp_ct)+(S.gex_meta&&S.gex_meta.chain_timestamp?" · options chain "+utcToCT(S.gex_meta.chain_timestamp):"");
  renderHero();btns("scopeBtns",SCOPES.map(([k])=>[k,scopeLabel(k)]),"scope",drawGex);
@@ -533,11 +558,19 @@ const F=window.SPYGammaFeed;
 F.onSnapshot(renderSnapshot);F.onTick(applyLiveTick);F.onLog(r=>{LOG=r;if(S&&st.px==="log")drawPx()});
 F.onIndex(idx=>{const wasLatest=CUR===0,prevMeta=IDX&&IDX.snapshots[0],prevTop=prevMeta&&prevMeta.id;window.__prevSnapMeta=prevMeta||null;fillIndex(idx);if(prevTop&&prevTop!==idx.snapshots[0]?.id){if(wasLatest){load(0).then(()=>{if(window.LiveHub)LiveHub.onNewSnapshot(idx.snapshots[0],prevMeta,true)}).catch(()=>{});}else{const i=idx.snapshots.findIndex(s=>s.id===prevTop);if(i>=0){CUR=i;$("snapSel").value=i;}if(window.LiveHub)LiveHub.onNewSnapshot(idx.snapshots[0],prevMeta,false);}}});
 F.onStatus(s=>{$("srcLbl").textContent=s.label;$("srcDot").className="dot "+s.state;$("fmStat").textContent=`State: ${s.state}${s.lastUpdate?" · last update "+s.lastUpdate.toLocaleTimeString("en-US",{timeZone:"America/Chicago"})+" CT":""}`});
+function syncFmAlpacaBox(){const m=document.querySelector('input[name=fm]:checked')?.value;const box=$("fmAlpacaBox");if(box)box.style.display=m==="alpaca_iex"?"":"none"}
 function openFm(){const c=F.config;document.querySelectorAll('input[name=fm]').forEach(r=>r.checked=r.value===c.mode);$("fmRest").value=c.restUrl||"";$("fmWs").value=c.wsUrl||"";$("fmPoll").value=c.pollSec;$("fmAuto").checked=!!c.autoRefresh;
  try{const t=JSON.parse(localStorage.getItem("horsey_live_toast")||"{}");if($("fmToastSec"))$("fmToastSec").value=t.dismissSec||14;if($("fmBrowserNote"))$("fmBrowserNote").checked=!!t.browserNote}catch(e){if($("fmToastSec"))$("fmToastSec").value=14}
- $("feedModal").classList.add("open")}
+ try{const a=JSON.parse(localStorage.getItem("horsey_alpaca_paper")||"null");if($("fmAlpacaKey"))$("fmAlpacaKey").value=a&&a.key?a.key:"";if($("fmAlpacaSecret"))$("fmAlpacaSecret").value=a&&a.secret?a.secret:"";if($("fmAlpacaMsg"))$("fmAlpacaMsg").textContent=a&&a.key?"Paper keys saved in this browser ✓":"No Paper keys in this browser"}catch(e){}
+ syncFmAlpacaBox();$("feedModal").classList.add("open")}
+document.querySelectorAll('input[name=fm]').forEach(r=>r.addEventListener("change",syncFmAlpacaBox));
+if($("fmAlpacaClear"))$("fmAlpacaClear").onclick=()=>{try{localStorage.removeItem("horsey_alpaca_paper")}catch(e){}if($("fmAlpacaKey"))$("fmAlpacaKey").value="";if($("fmAlpacaSecret"))$("fmAlpacaSecret").value="";if($("fmAlpacaMsg"))$("fmAlpacaMsg").textContent="Cleared from this browser"}
 $("srcBtn").onclick=openFm;$("fmClose").onclick=()=>$("feedModal").classList.remove("open");$("feedModal").onclick=e=>{if(e.target.id==="feedModal")$("feedModal").classList.remove("open")};
-$("fmSave").onclick=()=>{const mode=document.querySelector('input[name=fm]:checked')?.value||"github_archive";F.configure({mode,restUrl:$("fmRest").value.trim(),wsUrl:$("fmWs").value.trim(),pollSec:Math.max(5,+$("fmPoll").value||60),autoRefresh:$("fmAuto").checked});
+$("fmSave").onclick=()=>{const mode=document.querySelector('input[name=fm]:checked')?.value||"github_archive";
+ if(mode==="alpaca_iex"){const key=($("fmAlpacaKey")&&$("fmAlpacaKey").value||"").trim(),secret=($("fmAlpacaSecret")&&$("fmAlpacaSecret").value||"").trim();
+  if(key&&secret){try{localStorage.setItem("horsey_alpaca_paper",JSON.stringify({key,secret,saved_ct:new Date().toISOString()}))}catch(e){}}
+  else if($("fmAlpacaMsg"))$("fmAlpacaMsg").textContent="Enter both Paper Key ID + Secret (or keep previously saved keys)"}
+ F.configure({mode,restUrl:$("fmRest").value.trim(),wsUrl:$("fmWs").value.trim(),pollSec:Math.max(5,+$("fmPoll").value||60),autoRefresh:$("fmAuto").checked});
  try{localStorage.setItem("horsey_live_toast",JSON.stringify({dismissSec:Math.max(5,+(($("fmToastSec")&&$("fmToastSec").value)||14)),browserNote:!!($("fmBrowserNote")&&$("fmBrowserNote").checked)}));if(window.LiveHub)LiveHub.loadPrefs()}catch(e){}
  $("feedModal").classList.remove("open")};
 $("fmReset").onclick=()=>{F.reset();try{localStorage.removeItem("horsey_live_toast")}catch(e){}openFm()};
@@ -557,9 +590,63 @@ addEventListener("hashchange",()=>{const t=location.hash.slice(1);if(["briefings
 let POD=null;
 
 async function loadPod(force){if(POD&&!force)return POD;if(!POD)POD={};
- const g=async u=>{try{const r=await fetch(cacheBust(u),{cache:"no-store"});if(!r.ok)return null;return u.endsWith(".jsonl")?(await r.text()).split("\n").filter(Boolean).map(l=>{try{return JSON.parse(l)}catch(e){return null}}).filter(Boolean):await r.json()}catch(e){return null}};
- [POD.roster,POD.score,POD.state,POD.blot]=await Promise.all([g("pod/roster.json"),g("pod/scorecard.json"),g("pod/signals/latest_pod_state.json"),g("pod/ledger/paper_blotter.jsonl")]);
- renderPod();return POD}
+ const g=async u=>{try{if(u.endsWith(".jsonl")){const t=await getPodText(u);if(t==null)return null;return t.split("\n").filter(Boolean).map(l=>{try{return JSON.parse(l)}catch(e){return null}}).filter(Boolean)}return await getPodJSON(u)}catch(e){return null}};
+ [POD.roster,POD.score,POD.state,POD.blot,POD.paper]=await Promise.all([g("pod/roster.json"),g("pod/scorecard.json"),g("pod/signals/latest_pod_state.json"),g("pod/ledger/paper_blotter.jsonl"),g("pod/paper_account_state.json")]);
+ // Also try dry-run payload file
+ try{POD.dryRun=await getPodJSON("pod/alpaca_last_dry_run.json")}catch(e){POD.dryRun=null}
+ if(POD_PRIVATE){renderPodPrivate();return POD}
+ renderPod();renderAlpacaDesk();return POD}
+function renderPodPrivate(){
+ const msg='<div class="card"><h2>🔒 Agent Pod is private on the public archive</h2><p class="note"><code>pod/</code> is gitignored so CEO briefings, blotter tickets, and Alpaca Paper state stay off GitHub Pages. Run the dashboard against a local checkout (or a private feed) to use Tab 6. Market GEX snapshots on this site still work.</p></div>';
+ if($("podBanner"))$("podBanner").innerHTML="";if($("podCio"))$("podCio").innerHTML=msg;if($("podCards"))$("podCards").innerHTML="";
+ if($("podScore"))$("podScore").innerHTML="";if($("podBlot"))$("podBlot").innerHTML="";
+ if($("alpacaBadge")){$("alpacaBadge").textContent="Pod private on public archive";$("alpacaBadge").className="pill warn"}
+ if($("alpacaDeskNote"))$("alpacaDeskNote").textContent="pod/paper_account_state.json not available on public GitHub Pages."}
+function money(v){if(v==null||v===""||isNaN(+v))return "—";return "$"+Number(v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}
+function renderAlpacaDesk(){
+ const st=(POD&&POD.paper)||null, badge=$("alpacaBadge"), metrics=$("alpacaMetrics");
+ if(!badge)return;
+ if(!st){badge.textContent="Awaiting Paper sync";badge.className="pill warn";if(metrics)metrics.innerHTML="";return}
+ if(st.status==="awaiting_keys"||st.status==="not_configured"){badge.textContent="Awaiting Paper API Keys";badge.className="pill warn"}
+ else if(st.status==="connected"){badge.textContent=`Connected · Paper Equity ${money(st.equity??st.account?.equity)} · BP ${money(st.buying_power??st.account?.buying_power)}`;badge.className="pill pos"}
+ else{badge.textContent=String(st.status||"unknown");badge.className="pill"}
+ if($("alpacaDeskNote"))$("alpacaDeskNote").textContent=`${st.broker||"Alpaca Paper"} · mode ${st.mode||"paper_only"} · updated ${(st.updated_ct||"—").replace("T"," ").slice(0,19)} CT · host locked ${st.host_locked||"paper-api.alpaca.markets"}`;
+ if(metrics){const a=st.account||{};metrics.innerHTML=`<span class="pill">Equity ${money(st.equity??a.equity)}</span><span class="pill">Buying power ${money(st.buying_power??a.buying_power)}</span><span class="pill">Cash ${money(st.cash??a.cash)}</span><span class="pill">${(st.positions||[]).length} positions</span><span class="pill">${(st.orders||[]).length} recent orders</span>`}
+ const pos=st.positions||[];
+ if($("alpacaPos"))$("alpacaPos").innerHTML=pos.length?`<tr><th>Symbol</th><th>Qty</th><th>Avg</th><th>Mkt</th><th>uPnL</th></tr>`+pos.map(x=>`<tr><td>${esc(x.symbol)}</td><td>${esc(x.qty)}</td><td>${esc(x.avg_entry_price)}</td><td>${esc(x.market_value)}</td><td class="${(+x.unrealized_pl||0)>=0?"pos":"neg"}">${esc(x.unrealized_pl)}</td></tr>`).join(""):`<tr><td class="mut">No open paper positions.</td></tr>`;
+ const ord=st.orders||[];
+ if($("alpacaOrd"))$("alpacaOrd").innerHTML=ord.length?`<tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Type</th><th>Status</th><th>Limit</th></tr>`+ord.map(x=>`<tr><td>${esc(x.symbol)}</td><td>${esc(x.side)}</td><td>${esc(x.qty)}</td><td>${esc(x.type||x.order_type)}</td><td>${esc(x.status)}</td><td>${esc(x.limit_price||"—")}</td></tr>`).join(""):`<tr><td class="mut">No recent paper orders.</td></tr>`;
+ // Preview from blotter ticket payload or dry-run file
+ let preview=null;
+ const tk=(POD.blot||[]).find(t=>t.ticket_id==="TKT-ITT-2026-11-06-A")||(POD.blot||[]).slice(-1)[0];
+ if(tk&&tk.alpaca_paper_payload)preview=tk.alpaca_paper_payload;
+ else if(POD.dryRun&&POD.dryRun.payload)preview=POD.dryRun.payload;
+ if($("alpacaPreview"))$("alpacaPreview").textContent=preview?JSON.stringify(preview,null,2):"No dry-run payload yet. Local: python3 scripts/pod_engine.py alpaca-stage-ticket --ticket-id TKT-ITT-2026-11-06-A --dry-run";
+ // Optional browser live refresh if CORS + keys
+ maybeRefreshAlpacaBrowser();
+}
+async function maybeRefreshAlpacaBrowser(){
+ try{
+  const a=JSON.parse(localStorage.getItem("horsey_alpaca_paper")||"null");
+  if(!a||!a.key||!a.secret)return;
+  const headers={"APCA-API-KEY-ID":a.key,"APCA-API-SECRET-KEY":a.secret,"Accept":"application/json"};
+  const acct=await fetch("https://paper-api.alpaca.markets/v2/account",{headers,cache:"no-store"});
+  if(!acct.ok)return;
+  const account=await acct.json();
+  const [pr,or]=await Promise.all([
+    fetch("https://paper-api.alpaca.markets/v2/positions",{headers,cache:"no-store"}).then(r=>r.ok?r.json():[]),
+    fetch("https://paper-api.alpaca.markets/v2/orders?status=all&limit=20",{headers,cache:"no-store"}).then(r=>r.ok?r.json():[])
+  ]);
+  if(!POD)POD={};
+  POD.paper={status:"connected",broker:"Alpaca Paper Trading (paper-api.alpaca.markets)",mode:"paper_only",host_locked:"https://paper-api.alpaca.markets",updated_ct:new Date().toISOString(),
+    equity:+account.equity,buying_power:+account.buying_power,cash:+account.cash,account:{equity:account.equity,buying_power:account.buying_power,cash:account.cash,status:account.status},
+    positions:(pr||[]).map(x=>({symbol:x.symbol,qty:x.qty,avg_entry_price:x.avg_entry_price,market_value:x.market_value,unrealized_pl:x.unrealized_pl,side:x.side})),
+    orders:(or||[]).map(x=>({symbol:x.symbol,side:x.side,qty:x.qty,type:x.type,status:x.status,limit_price:x.limit_price}))};
+  // Re-render metrics only (avoid recursion)
+  const st=POD.paper,badge=$("alpacaBadge"),metrics=$("alpacaMetrics");
+  if(badge){badge.textContent=`Connected · Paper Equity ${money(st.equity)} · BP ${money(st.buying_power)}`;badge.className="pill pos"}
+  if(metrics)metrics.innerHTML=`<span class="pill">Equity ${money(st.equity)}</span><span class="pill">Buying power ${money(st.buying_power)}</span><span class="pill">Cash ${money(st.cash)}</span><span class="pill">${st.positions.length} positions</span><span class="pill">${st.orders.length} recent orders</span><span class="pill pos">live browser refresh</span>`;
+ }catch(e){/* CORS or network — synced JSON remains source of truth */}}
 function renderPod(){const R=POD.roster||{},S=POD.state||{},SC=POD.score||{},A=(R.agents||[]),by=id=>A.find(a=>a.id===id)||{};
  const nd=(t,s)=>`<div class="nd">${t}<small>${s}</small></div>`,ar=x=>`<span class="ar">${x}</span>`;
  const sp=A.filter(a=>a.role==="specialist");
@@ -608,8 +695,9 @@ const BR={idx:null,role:"cio",run:null,raw:false,txt:"",cache:{}};
 const BR_ROLES=[["cio","CIO Executive Briefing","🛡️"],["ptj","PTJ Macro & Regime","🌐"],["intraday","Intraday Tape & Gamma","⚡"],["buffett","Buffett Value","🏛️"],["gamma_data","SPY Gamma Data (.md)","📡"]];
 async function loadBriefings(force){const keepRole=BR.role||"cio",keepRun=BR.run;
  if(BR.idx&&!force)return BR.idx;
- try{BR.idx=await getJSON("pod/memos_index.json")}catch(e){if(!BR.idx)BR.idx={memos:[]}}
- try{BR.state=await getJSON("pod/signals/latest_pod_state.json")}catch(e){}
+ try{const idx=await getPodJSON("pod/memos_index.json");if(idx)BR.idx=idx;else if(!BR.idx)BR.idx={memos:[],count:0,by_run:[]}}catch(e){if(!BR.idx)BR.idx={memos:[]}}
+ try{const st=await getPodJSON("pod/signals/latest_pod_state.json");if(st)BR.state=st}catch(e){}
+ if(POD_PRIVATE){$("brIdxNote").textContent="pod/ private on public archive";$("brStrip").innerHTML="";$("brBody").innerHTML='<div class="note">🔒 Briefings live under <code>pod/</code> (gitignored on GitHub Pages). Open locally to read CIO/specialist memos.</div>';drawBrPills();return BR.idx}
  const runs=BR.idx.by_run||[];
  const latestRun=runs[0]?.run_id||null;
  if(!keepRun||!runs.some(r=>r.run_id===keepRun))BR.run=latestRun;else BR.run=keepRun;
@@ -646,12 +734,12 @@ loadBriefings();
 
 // ---------- CEO Decisions & Questions slot ----------
 const CQ={q:null,d:null,resp:{},note:"",LS:"horsey_ceo_decisions",PAT:"horsey_gh_pat",REPO:"brahaymin/horsey",CIO:"7ad52fe7-3d09-4438-bfa9-552a13aef8b6"};
-async function loadCeoQ(force){const g=async u=>{try{const r=await fetch(cacheBust(u),{cache:"no-store"});return r.ok?await r.json():null}catch(e){return null}};
+async function loadCeoQ(force){const g=async u=>{try{return await getPodJSON(u)}catch(e){return null}};
  const prevId=CQ.q?.prompt_set_id,prevStatus=CQ.q?.status,unsaved=$("ceoMsg")&&/Unsaved/.test($("ceoMsg").textContent||"");
  const keepResp=unsaved?JSON.parse(JSON.stringify(CQ.resp||{})):null;
  const keepNote=unsaved?($("ceoNote")?.value||CQ.note||""):null;
  [CQ.q,CQ.d]=await Promise.all([g("pod/ceo_questions.json"),g("pod/ceo_decisions/latest_decisions.json")]);
- if(!CQ.q){$("ceoQ").style.display="none";return null}
+ if(!CQ.q){$("ceoQ").style.display="none";if(POD_PRIVATE&&$("ceoQStatus"))$("ceoQStatus").textContent="pod/ private";return null}
  $("ceoQ").style.display="";
  let local=null;try{local=JSON.parse(localStorage.getItem(CQ.LS)||"null")}catch(e){}
  const same=x=>x&&x.prompt_set_id===CQ.q.prompt_set_id;

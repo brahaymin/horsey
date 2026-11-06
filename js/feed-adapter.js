@@ -1,37 +1,28 @@
 /*!
- * SPYGammaFeed: plug-and-play data adapter for the horsey SPY Gamma dashboard.
- * Keeps data ingestion separate from UI rendering. The UI registers:
- *   SPYGammaFeed.onSnapshot(fn)  -> fn(snapshotJson, meta)   full re-render (renderSnapshot)
- *   SPYGammaFeed.onTick(fn)      -> fn(tick)                 lightweight live update (applyLiveTick)
- *   SPYGammaFeed.onStatus(fn)    -> fn({mode,state,label,lastUpdate})
- *   SPYGammaFeed.onPoll(fn)      -> fn({reason, indexChanged, topId, idx})  after each pollNow
- * Modes:
- *   "github_archive" (default): ./snapshots/index.json + snapshot JSON + ./history/timeseries.jsonl, optional N-second poll
- *   "rest":      polls config.restUrl every config.pollSec seconds. A response that has `gex_scopes` is treated as a full
- *                snapshot (same schema as latest.json); otherwise it is treated as a tick. Override with
- *                window.SPYGammaFeedMapper = (json) => ({snapshot?, tick?})
- *   "websocket": connects to config.wsUrl (wss://). Each message is JSON: either {type:"snapshot", data:{...}}
- *                or a tick {spy_price, spy_change_pct, spy_volume, vix, es_price, nq_price, gex_45d, gex_0dte, ts}
- * Config is saved in localStorage ("spyGammaFeedConfig") and can be set with the in-page Data Source modal or
- * the URL params ?feed=rest&url=... / ?feed=websocket&url=...
- * pollNow() / checkUpdates() also fire on visibilitychange (visible), window focus, and online — throttled to ≥5s —
- * so unlocking a phone catches hourly snapshots that landed while the screen was asleep.
- * Live polls append ?_cb=<bucket> and use {cache:"no-store"} to defeat GitHub Pages max-age=600.
- * See docs/live_feed_spec.md for the full schema.
+ * SPYGammaFeed v1.2 — data adapter for the horsey SPY Gamma dashboard.
+ * Modes: github_archive | rest | websocket | alpaca_iex
+ * alpaca_iex: wss://stream.data.alpaca.markets/v2/iex (Paper keys in localStorage["horsey_alpaca_paper"])
+ *   + keeps GitHub archive poll for GEX/briefings in parallel.
+ * See docs/live_feed_spec.md.
  */
 (function (w) {
   "use strict";
   const LS = "spyGammaFeedConfig";
+  const LS_ALPACA = "horsey_alpaca_paper";
+  const ALPACA_IEX_WS = "wss://stream.data.alpaca.markets/v2/iex";
   const DEFAULTS = { mode: "github_archive", restUrl: "", wsUrl: "", pollSec: 60, autoRefresh: true };
   const subs = { snapshot: [], tick: [], status: [], index: [], log: [], poll: [] };
   let cfg = Object.assign({}, DEFAULTS);
   try { Object.assign(cfg, JSON.parse(localStorage.getItem(LS) || "{}")); } catch (e) {}
   try {
     const q = new URLSearchParams(location.search);
-    if (q.get("feed")) { cfg.mode = q.get("feed"); if (q.get("url")) cfg[cfg.mode === "websocket" ? "wsUrl" : "restUrl"] = q.get("url"); }
+    if (q.get("feed")) {
+      cfg.mode = q.get("feed");
+      if (q.get("url")) cfg[cfg.mode === "websocket" ? "wsUrl" : "restUrl"] = q.get("url");
+    }
   } catch (e) {}
-  let timer = null, ws = null, lastIndexTop = null, state = "idle", lastUpdate = null;
-  let lastPollAt = 0, wakeBound = false;
+  let timer = null, archiveTimer = null, ws = null, lastIndexTop = null, state = "idle", lastUpdate = null;
+  let lastPollAt = 0, wakeBound = false, priorClose = null, alpacaAuthOk = false;
   const POLL_THROTTLE_MS = 5000;
   const emit = (k, ...a) => subs[k].forEach(f => { try { f(...a); } catch (e) { console.error(e); } });
   const status = (s) => { state = s; emit("status", F.status()); };
@@ -50,7 +41,13 @@
     if (!r.ok) throw new Error(u + " → HTTP " + r.status);
     return r.text();
   }
-
+  function alpacaKeys() {
+    try {
+      const o = JSON.parse(localStorage.getItem(LS_ALPACA) || "null");
+      if (o && o.key && o.secret) return { key: String(o.key).trim(), secret: String(o.secret).trim() };
+    } catch (e) {}
+    return null;
+  }
   function bindWake() {
     if (wakeBound) return;
     wakeBound = true;
@@ -60,9 +57,64 @@
     w.addEventListener("focus", () => F.pollNow("focus"));
     w.addEventListener("online", () => F.pollNow("online"));
   }
+  function startArchivePoll() {
+    if (!cfg.autoRefresh) return;
+    clearInterval(archiveTimer);
+    archiveTimer = setInterval(() => { F.pollNow("timer"); }, Math.max(10, cfg.pollSec) * 1000);
+  }
+  function handleAlpacaMsg(raw) {
+    let msgs; try { msgs = JSON.parse(raw); } catch (e) { return; }
+    if (!Array.isArray(msgs)) msgs = [msgs];
+    msgs.forEach(m => {
+      if (!m || typeof m !== "object") return;
+      if (m.T === "success" && /authenticated/i.test(String(m.msg || ""))) {
+        alpacaAuthOk = true; status("live");
+        try { ws.send(JSON.stringify({ action: "subscribe", trades: ["SPY"], quotes: ["SPY"] })); } catch (e) {}
+        return;
+      }
+      if (m.T === "error") { console.warn("[SPYGammaFeed] Alpaca IEX error", m); status("error"); return; }
+      if (m.T === "subscription") return;
+      if ((m.T === "t" || m.T === "q") && (m.S === "SPY" || m.symbol === "SPY")) {
+        let px = null;
+        if (m.T === "t" && m.p != null) px = +m.p;
+        else if (m.T === "q") {
+          const bp = m.bp != null ? +m.bp : null, ap = m.ap != null ? +m.ap : null;
+          if (bp != null && ap != null && bp > 0 && ap > 0) px = (bp + ap) / 2;
+          else px = ap || bp;
+        }
+        if (px == null || !(px > 0)) return;
+        const tick = { spy_price: px, ts: m.t || new Date().toISOString() };
+        if (priorClose && priorClose > 0) tick.spy_change_pct = ((px - priorClose) / priorClose) * 100;
+        F.applyLiveTick(tick);
+      }
+    });
+  }
+  function startAlpacaIex() {
+    const creds = alpacaKeys();
+    if (!creds) { status("error"); console.warn("[SPYGammaFeed] alpaca_iex mode needs localStorage horsey_alpaca_paper {key,secret}"); startArchivePoll(); return; }
+    status("connecting");
+    alpacaAuthOk = false;
+    try {
+      ws = new WebSocket(ALPACA_IEX_WS);
+      ws.onopen = () => {
+        try { ws.send(JSON.stringify({ action: "auth", key: creds.key, secret: creds.secret })); } catch (e) { status("error"); }
+      };
+      ws.onerror = () => status("error");
+      ws.onclose = () => { if (state !== "idle") status("disconnected"); };
+      ws.onmessage = (ev) => handleAlpacaMsg(ev.data);
+    } catch (e) {
+      console.warn("[SPYGammaFeed] Alpaca IEX WebSocket failed", e);
+      status("error");
+    }
+    // Always keep GitHub archive poll for GEX snapshots + LiveHub briefings
+    status("ok"); // interim until auth success flips to live
+    startArchivePoll();
+    // Kick one archive poll immediately
+    F.pollNow("alpaca_iex_boot");
+  }
 
   const F = {
-    version: "1.1.0",
+    version: "1.2.0",
     get config() { return Object.assign({}, cfg); },
     configure(c) { cfg = Object.assign({}, cfg, c || {}); try { localStorage.setItem(LS, JSON.stringify(cfg)); } catch (e) {} F.restart(); return F.config; },
     reset() { try { localStorage.removeItem(LS); } catch (e) {} cfg = Object.assign({}, DEFAULTS); F.restart(); },
@@ -73,12 +125,20 @@
     onLog(f) { subs.log.push(f); return F; },
     onPoll(f) { subs.poll.push(f); return F; },
     bustUrl: bust,
+    setPriorClose(v) { priorClose = (v == null || isNaN(+v)) ? null : +v; return priorClose; },
+    getPriorClose() { return priorClose; },
     status() {
-      const m = { github_archive: "GitHub Archive", rest: "REST Poll", websocket: "Live WebSocket" }[cfg.mode] || cfg.mode;
-      const refresh = cfg.mode === "websocket" ? "streaming" : (cfg.autoRefresh ? `Auto-Refresh ${cfg.pollSec}s` : "Manual");
+      const m = {
+        github_archive: "GitHub Archive",
+        rest: "REST Poll",
+        websocket: "Live WebSocket",
+        alpaca_iex: "Alpaca Paper IEX + Archive"
+      }[cfg.mode] || cfg.mode;
+      const refresh = (cfg.mode === "websocket" || (cfg.mode === "alpaca_iex" && alpacaAuthOk))
+        ? "streaming"
+        : (cfg.autoRefresh ? `Auto-Refresh ${cfg.pollSec}s` : "Manual");
       return { mode: cfg.mode, state, label: `Source: ${m} · ${refresh}`, lastUpdate };
     },
-    /* Archive helpers (also used by the snapshot selector in every mode) */
     async loadIndex() {
       let idx;
       try { idx = await getJSON("snapshots/index.json"); }
@@ -91,18 +151,33 @@
       emit("log", rows); return rows;
     },
     async loadSnapshot(meta) {
-      const s = await getJSON(meta.json_path); lastUpdate = new Date(); emit("snapshot", s, meta); status("ok"); return s;
+      const s = await getJSON(meta.json_path);
+      try {
+        const sum = s && s.summary || {};
+        const prev = sum.spy_previous_close || sum.spy_prev_close || (s.spy_detail && (s.spy_detail.previous_close || s.spy_detail.prev_close));
+        const close = sum.spy_regular_close || sum.spy_price;
+        F.setPriorClose(prev || close);
+      } catch (e) {}
+      lastUpdate = new Date(); emit("snapshot", s, meta); status(cfg.mode === "alpaca_iex" && alpacaAuthOk ? "live" : "ok"); return s;
     },
-    /* Public entry point for any live source */
-    applyLiveTick(tick) { if (!tick) return; lastUpdate = new Date(); emit("tick", tick); if (cfg.mode !== "github_archive") status("live"); },
-    renderSnapshot(s, meta) { lastUpdate = new Date(); emit("snapshot", s, meta || { id: "live", display_ct: "Live", json_path: cfg.restUrl || "live" }); },
-    stop() { clearInterval(timer); timer = null; if (ws) { try { ws.close(); } catch (e) {} ws = null; } status("idle"); },
+    applyLiveTick(tick) {
+      if (!tick) return;
+      lastUpdate = new Date();
+      emit("tick", tick);
+      if (cfg.mode !== "github_archive") status(cfg.mode === "alpaca_iex" ? (alpacaAuthOk ? "live" : state) : "live");
+    },
+    renderSnapshot(s, meta) {
+      lastUpdate = new Date();
+      emit("snapshot", s, meta || { id: "live", display_ct: "Live", json_path: cfg.restUrl || "live" });
+    },
+    stop() {
+      clearInterval(timer); timer = null;
+      clearInterval(archiveTimer); archiveTimer = null;
+      if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+      alpacaAuthOk = false;
+      status("idle");
+    },
     restart() { F.stop(); F.start(); },
-    /**
-     * Unified live check. Fires on the interval timer and on phone unlock / tab focus / online.
-     * Throttled to ≥5s between checks (pass reason "force" to bypass).
-     * Alias: checkUpdates().
-     */
     async pollNow(reason) {
       reason = reason || "manual";
       const now = Date.now();
@@ -120,9 +195,9 @@
           status("live");
           lastUpdate = new Date();
         } else if (cfg.mode === "websocket") {
-          /* streaming — wake just notifies listeners; no REST poll */
           lastUpdate = new Date();
         } else {
+          // github_archive OR alpaca_iex archive leg
           const idx = await getJSON("snapshots/index.json");
           const top = idx.snapshots && idx.snapshots[0] && idx.snapshots[0].id;
           out.idx = idx; out.topId = top;
@@ -136,11 +211,11 @@
           }
           if (top) lastIndexTop = top;
           lastUpdate = new Date();
-          status("ok");
+          if (!(cfg.mode === "alpaca_iex" && alpacaAuthOk)) status("ok");
         }
       } catch (e) {
         out.error = String(e && e.message || e);
-        status("error");
+        if (cfg.mode !== "alpaca_iex") status("error");
       }
       emit("poll", out);
       return out;
@@ -166,12 +241,11 @@
             if (out.tick) F.applyLiveTick(out.tick);
           };
         } catch (e) { console.warn("[SPYGammaFeed] WebSocket failed", e); status("error"); }
+      } else if (cfg.mode === "alpaca_iex") {
+        startAlpacaIex();
       } else {
-        // github_archive: poll the index; notify the UI when a newer snapshot lands
         status("ok");
-        if (cfg.autoRefresh) {
-          timer = setInterval(() => { F.pollNow("timer"); }, Math.max(10, cfg.pollSec) * 1000);
-        }
+        startArchivePoll();
       }
     },
     _setIndexTop(id) { lastIndexTop = id; }

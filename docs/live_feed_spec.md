@@ -18,6 +18,8 @@ SPYGammaFeed.onPoll(info => ...);                                     // after e
 | `github_archive` (default) | `pollSec`, `autoRefresh` | Loads `snapshots/index.json`, the selected snapshot JSON and `history/timeseries.jsonl`. Polls the index every `pollSec` seconds and auto-loads a newer snapshot if you are viewing the latest one. |
 | `rest` | `restUrl`, `pollSec` | Polls `restUrl`. If the JSON has `gex_scopes`, it is rendered as a full snapshot (same schema as `latest.json`); otherwise it is applied as a tick. |
 | `websocket` | `wsUrl` | Each message is either `{"type":"snapshot","data":{...latest.json schema...}}` or a tick object. |
+| `alpaca_iex` | Paper keys in `localStorage["horsey_alpaca_paper"]` | Connects to `wss://stream.data.alpaca.markets/v2/iex`, auths with Paper key/secret, subscribes to SPY trades/quotes → `applyLiveTick`. **Keeps GitHub archive polling in parallel** for GEX snapshots + LiveHub briefings. |
+
 
 Set the mode in the gear (⚙) modal, with `SPYGammaFeed.configure({mode:"rest", restUrl:"https://…", pollSec:15})`, or with URL params: `?feed=websocket&url=wss://…`.
 The config is saved in the browser's `localStorage`.
@@ -61,3 +63,11 @@ window.SPYGammaFeedMapper = (json) => ({ tick: { spy_price: json.last, vix: json
 
 ## Full snapshot schema
 See any `snapshots/YYYY/MM/YYYY-MM-DD/*.json` (written by `scripts/sync_github_archive.py`). The keys are `summary`, `spy_detail`, `gex_scopes`, `intraday_30m`, `daily_15d`, `volatility_table`, `vol_term_structure`, `assets_table`, `futures_table`, `verified_headlines`, `gex_meta` and `md_rel_path`.
+
+## Alpaca Paper Live Stream (`alpaca_iex`)
+
+1. Save Paper Key ID + Secret in the Data Source modal (stored only in this browser).
+2. Select **Alpaca Paper Live Stream**.
+3. Adapter connects to `wss://stream.data.alpaca.markets/v2/iex` (WebSockets have no CORS), sends `{"action":"auth","key","secret"}`, then subscribes to SPY trades/quotes.
+4. REST against `paper-api.alpaca.markets` also allows browser CORS (`Access-Control-Allow-Origin: *`) for optional account/positions refresh on Tab 6.
+5. Server-side sync (no browser keys needed): `python3 scripts/pod_engine.py alpaca-status` writes sanitized state to `pod/paper_account_state.json` (private — `pod/` is gitignored on the public archive).

@@ -5,12 +5,19 @@ and Self-Training Quant Auditor for the horsey multi-agent pod.
 Paper / architecture demo — NOT live financial advice. Zero paid dependencies.
 
 Subcommands:
-  status       Executive CIO brief (Central Time)
-  size-ticket  Deterministic 6-point 50-Mistakes firewall + bracket sizer
-  log-signal   Validate & record a specialist signal
-  grade        Grade elapsed signals vs history/timeseries.jsonl, update pod/scorecard.json
+  status              Executive CIO brief (Central Time)
+  size-ticket         Deterministic 6-point 50-Mistakes firewall + bracket sizer
+  log-signal          Validate & record a specialist signal
+  grade               Grade elapsed signals vs history/timeseries.jsonl, update pod/scorecard.json
+  build-memos-index   Index CIO/specialist memos for the web app
+  bridge-ledger       Bridge specialist ledgers into signals_log
+  post-questions      Publish CEO question set
+  alpaca-status       Alpaca Paper account/positions/orders → pod/paper_account_state.json
+  alpaca-sync         Alias of alpaca-status (refresh sanitized paper state)
+  alpaca-find-option  Resolve OCC option symbol (offline OCC math; live quote if keys set)
+  alpaca-stage-ticket Build/validate Alpaca Paper order from blotter ticket (--dry-run / --submit-paper)
 """
-import argparse, json, math, os, sys, uuid
+import argparse, json, math, os, sys, uuid, urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
 
 try:
@@ -23,6 +30,7 @@ ROOT = os.environ.get("HORSEY_ROOT", os.path.dirname(os.path.dirname(os.path.abs
 P = lambda *a: os.path.join(ROOT, *a)
 LATEST, ROSTER, SCORE = P("latest.json"), P("pod", "roster.json"), P("pod", "scorecard.json")
 STATE, SIGLOG, BLOTTER = P("pod", "signals", "latest_pod_state.json"), P("pod", "ledger", "signals_log.jsonl"), P("pod", "ledger", "paper_blotter.jsonl")
+PAPER_STATE, PAPER_ORDERS = P("pod", "paper_account_state.json"), P("pod", "ledger", "alpaca_paper_orders.jsonl")
 TS = P("history", "timeseries.jsonl")
 REGIMES = ("short_gamma_backwardation", "positive_gamma_contango", "below_200sma")
 PTJ_ID = "05895e3e-1c82-4cec-9ff3-07aa73b5c0db"
@@ -507,6 +515,423 @@ def post_questions(path):
     return q
 
 
+
+# ---------------------------------------------------------------- Alpaca Paper Trading (HARD paper-only rail)
+# Hosts are intentionally constants — never accept api.alpaca.markets (live capital).
+ALPACA_PAPER_HOST = "https://paper-api.alpaca.markets"
+ALPACA_DATA_HOST = "https://data.alpaca.markets"
+ALPACA_LIVE_HOST_BLOCKLIST = ("https://api.alpaca.markets", "api.alpaca.markets")
+ALPACA_ENV_FILE = P(".env.alpaca")
+
+
+def _load_dotenv_alpaca(path=None):
+    """Parse KEY=VALUE from gitignored .env.alpaca into a dict (no os.environ mutation required)."""
+    path = path or ALPACA_ENV_FILE
+    out = {}
+    if not os.path.exists(path):
+        return out
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip().strip('"').strip("'")
+    return out
+
+
+def alpaca_creds():
+    """Return (key_id, secret) from env or .env.alpaca. Never logs secrets."""
+    envf = _load_dotenv_alpaca()
+    key = os.environ.get("APCA_API_KEY_ID") or os.environ.get("ALPACA_API_KEY") or envf.get("APCA_API_KEY_ID") or envf.get("ALPACA_API_KEY")
+    sec = os.environ.get("APCA_API_SECRET_KEY") or os.environ.get("ALPACA_SECRET_KEY") or envf.get("APCA_API_SECRET_KEY") or envf.get("ALPACA_SECRET_KEY")
+    return (key or "").strip() or None, (sec or "").strip() or None
+
+
+def assert_paper_host(url):
+    u = (url or "").strip().lower()
+    for bad in ALPACA_LIVE_HOST_BLOCKLIST:
+        if bad in u and "paper-api" not in u:
+            raise RuntimeError(f"REFUSED: live Alpaca host blocked ({bad}). Paper-only rail requires {ALPACA_PAPER_HOST}")
+    if u.startswith("http") and "paper-api.alpaca.markets" not in u and "data.alpaca.markets" not in u:
+        raise RuntimeError(f"REFUSED: non-paper Alpaca host: {url}")
+    return url
+
+
+def alpaca_request(method, host, path, body=None, params=None, timeout=20):
+    """Authenticated HTTPS call. host must be paper-api or data. Never hits live api.alpaca.markets."""
+    assert_paper_host(host)
+    key, sec = alpaca_creds()
+    if not key or not sec:
+        raise RuntimeError("Alpaca Paper keys not configured (set APCA_API_KEY_ID|ALPACA_API_KEY and APCA_API_SECRET_KEY|ALPACA_SECRET_KEY, or .env.alpaca)")
+    q = ("?" + urllib.parse.urlencode(params)) if params else ""
+    url = host.rstrip("/") + path + q
+    assert_paper_host(url)
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method=method.upper())
+    req.add_header("APCA-API-KEY-ID", key)
+    req.add_header("APCA-API-SECRET-KEY", sec)
+    req.add_header("Accept", "application/json")
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read().decode("utf-8")
+            return json.loads(raw) if raw else None
+    except urllib.error.HTTPError as e:
+        err = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Alpaca HTTP {e.code} {path}: {err[:400]}") from e
+
+
+def occ_option_symbol(underlying, expiration, opt_type, strike):
+    """Build OCC symbol offline, e.g. SPY + 2026-11-06 + put + 732 → SPY261106P00732000."""
+    u = underlying.upper().strip()
+    exp = expiration.replace("-", "")
+    if len(exp) == 8:
+        yymmdd = exp[2:]
+    elif len(exp) == 6:
+        yymmdd = exp
+    else:
+        raise ValueError(f"bad expiration {expiration}")
+    cp = "P" if str(opt_type).lower().startswith("p") else "C"
+    strike_i = int(round(float(strike) * 1000))
+    return f"{u}{yymmdd}{cp}{strike_i:08d}"
+
+
+def _awaiting_keys_state():
+    return {
+        "schema_version": 1,
+        "status": "awaiting_keys",
+        "broker": "Alpaca Paper Trading (paper-api.alpaca.markets)",
+        "mode": "paper_only",
+        "host_locked": ALPACA_PAPER_HOST,
+        "data_host": ALPACA_DATA_HOST,
+        "live_host_blocked": list(ALPACA_LIVE_HOST_BLOCKLIST),
+        "updated_ct": iso_ct(),
+        "disclaimer": DISCLAIMER,
+        "account": None,
+        "positions": [],
+        "orders": [],
+        "note": "Set APCA_API_KEY_ID|ALPACA_API_KEY + APCA_API_SECRET_KEY|ALPACA_SECRET_KEY (env) or gitignored .env.alpaca, then run: python3 scripts/pod_engine.py alpaca-status",
+        "cors_browser": {
+            "paper_api": "Access-Control-Allow-Origin: * (browser REST OK with APCA headers)",
+            "iex_ws": "wss://stream.data.alpaca.markets/v2/iex (WebSocket — no CORS; auth via JSON after open)",
+        },
+    }
+
+
+def _sanitize_account(acct):
+    if not acct:
+        return None
+    keep = ("id", "account_number", "status", "currency", "cash", "buying_power", "regt_buying_power",
+            "daytrading_buying_power", "equity", "last_equity", "long_market_value", "short_market_value",
+            "portfolio_value", "pattern_day_trader", "trading_blocked", "transfers_blocked", "account_blocked",
+            "created_at", "multiplier", "initial_margin", "maintenance_margin", "sma", "daytrade_count")
+    out = {k: acct.get(k) for k in keep if k in acct}
+    # Mask account_number — keep last 4 only
+    an = out.get("account_number")
+    if isinstance(an, str) and len(an) > 4:
+        out["account_number_masked"] = ("*" * (len(an) - 4)) + an[-4:]
+        del out["account_number"]
+    # Never persist raw id as a secret vector; keep a short fingerprint only
+    aid = out.get("id")
+    if isinstance(aid, str) and len(aid) > 8:
+        out["account_id_fingerprint"] = aid[:4] + "…" + aid[-4:]
+        del out["id"]
+    return out
+
+
+def _sanitize_position(p):
+    keep = ("symbol", "asset_class", "qty", "qty_available", "avg_entry_price", "market_value",
+            "cost_basis", "unrealized_pl", "unrealized_plpc", "current_price", "lastday_price",
+            "change_today", "side")
+    return {k: p.get(k) for k in keep if k in p}
+
+
+def _sanitize_order(o):
+    keep = ("id", "client_order_id", "created_at", "updated_at", "submitted_at", "filled_at",
+            "expired_at", "canceled_at", "asset_class", "symbol", "qty", "filled_qty",
+            "filled_avg_price", "order_class", "order_type", "type", "side", "time_in_force",
+            "limit_price", "stop_price", "status", "extended_hours")
+    return {k: o.get(k) for k in keep if k in o}
+
+
+def alpaca_status(offline=False):
+    """Fetch paper account state when keys exist; otherwise write awaiting_keys. Never uses live host."""
+    key, sec = alpaca_creds()
+    if not key or not sec or offline:
+        st = _awaiting_keys_state()
+        if offline:
+            st["note"] = "offline mode — skipped network; keys " + ("present" if key and sec else "missing")
+        wj(PAPER_STATE, st)
+        return st
+    # Live paper fetch (only when keys configured)
+    acct = alpaca_request("GET", ALPACA_PAPER_HOST, "/v2/account")
+    positions = alpaca_request("GET", ALPACA_PAPER_HOST, "/v2/positions") or []
+    orders = alpaca_request("GET", ALPACA_PAPER_HOST, "/v2/orders", params={"status": "all", "limit": 20, "direction": "desc"}) or []
+    st = {
+        "schema_version": 1,
+        "status": "connected",
+        "broker": "Alpaca Paper Trading (paper-api.alpaca.markets)",
+        "mode": "paper_only",
+        "host_locked": ALPACA_PAPER_HOST,
+        "data_host": ALPACA_DATA_HOST,
+        "live_host_blocked": list(ALPACA_LIVE_HOST_BLOCKLIST),
+        "updated_ct": iso_ct(),
+        "disclaimer": DISCLAIMER,
+        "account": _sanitize_account(acct),
+        "positions": [_sanitize_position(p) for p in positions],
+        "orders": [_sanitize_order(o) for o in orders],
+        "equity": float(acct.get("equity") or 0) if acct else None,
+        "buying_power": float(acct.get("buying_power") or 0) if acct else None,
+        "cash": float(acct.get("cash") or 0) if acct else None,
+    }
+    wj(PAPER_STATE, st)
+    return st
+
+
+def alpaca_find_option(underlying, expiration, opt_type, strike, premium=None):
+    """Resolve OCC symbol. Uses offline OCC math always; optionally enriches from data API if keys exist."""
+    sym = occ_option_symbol(underlying, expiration, opt_type, strike)
+    out = {
+        "underlying": underlying.upper(),
+        "expiration": expiration,
+        "type": "put" if str(opt_type).lower().startswith("p") else "call",
+        "strike": float(strike),
+        "occ_symbol": sym,
+        "source": "occ_offline",
+        "host_locked": ALPACA_PAPER_HOST,
+        "updated_ct": iso_ct(),
+    }
+    if premium is not None:
+        out["target_premium"] = float(premium)
+    key, sec = alpaca_creds()
+    if key and sec:
+        try:
+            # Prefer contracts endpoint on paper host
+            contracts = alpaca_request(
+                "GET", ALPACA_PAPER_HOST, "/v2/options/contracts",
+                params={
+                    "underlying_symbols": underlying.upper(),
+                    "expiration_date": expiration,
+                    "type": out["type"],
+                    "strike_price_gte": str(float(strike) - 0.01),
+                    "strike_price_lte": str(float(strike) + 0.01),
+                    "limit": 10,
+                    "status": "active",
+                },
+            )
+            # API may return {"option_contracts":[...]} or a list
+            rows = contracts.get("option_contracts") if isinstance(contracts, dict) else contracts
+            if rows:
+                match = next((c for c in rows if abs(float(c.get("strike_price", 0)) - float(strike)) < 1e-6), rows[0])
+                out["contract"] = {
+                    "id": match.get("id"),
+                    "symbol": match.get("symbol"),
+                    "name": match.get("name"),
+                    "status": match.get("status"),
+                    "tradable": match.get("tradable"),
+                    "expiration_date": match.get("expiration_date"),
+                    "strike_price": match.get("strike_price"),
+                    "type": match.get("type"),
+                    "open_interest": match.get("open_interest"),
+                }
+                if match.get("symbol"):
+                    out["occ_symbol"] = match["symbol"]
+                    out["source"] = "alpaca_paper_contracts"
+        except Exception as e:
+            out["lookup_warning"] = str(e)[:240]
+    return out
+
+
+def _blotter_ticket(ticket_id):
+    rows = rjl(BLOTTER)
+    for t in rows:
+        if t.get("ticket_id") == ticket_id:
+            return t, rows
+    return None, rows
+
+
+def _firewall_ok(ticket):
+    fw = ticket.get("firewall") or []
+    if not fw:
+        return False, "ticket missing firewall[]"
+    if not all(c.get("pass") for c in fw):
+        bad = [c for c in fw if not c.get("pass")]
+        return False, f"firewall failed: {bad}"
+    if ticket.get("verdict") not in ("APPROVED_FOR_STAGING", "APPROVED", None) and ticket.get("status") not in (
+        "conditional_preapproved", "staged", "approved"
+    ):
+        # allow conditional_preapproved even if verdict field differs
+        if ticket.get("status") != "conditional_preapproved":
+            return False, f"verdict/status not approved: {ticket.get('verdict')}/{ticket.get('status')}"
+    return True, "6/6"
+
+
+def build_alpaca_paper_order(ticket, occ_symbol=None, expiration=None, strike=None):
+    """Translate blotter ticket → Alpaca Paper /v2/orders payload. Hard-locked to paper host."""
+    ok, why = _firewall_ok(ticket)
+    if not ok:
+        raise RuntimeError(f"Pre-Trade Risk Firewall blocked staging: {why}")
+    instr = ticket.get("instrument") or "stock"
+    qty = int(ticket.get("quantity") or 0)
+    if qty < 1:
+        raise RuntimeError("quantity < 1")
+    entry = ticket.get("entry")
+    stop = ticket.get("stop") or (ticket.get("oco_bracket") or {}).get("stop_order")
+    t1 = ticket.get("target1") or (ticket.get("oco_bracket") or {}).get("take_profit_1")
+    side = "buy" if (ticket.get("direction") or "long") == "long" else "sell"
+
+    if instr.startswith("option"):
+        # Resolve OCC
+        und = ticket.get("symbol") or "SPY"
+        exp = expiration or ticket.get("option_expiration") or ticket.get("session_target")
+        if exp and len(str(exp)) == 10 and str(exp)[4] == "-":
+            pass
+        elif ticket.get("session_target"):
+            exp = ticket["session_target"]
+        else:
+            exp = "2026-11-06"
+        opt_type = "put" if "put" in instr else "call"
+        # Default strike: underlying trigger prior low or round entry-context; ticket uses premium so strike from trigger
+        if strike is None:
+            strike = (ticket.get("underlying_trigger") or {}).get("prior_rth_low") or 732
+            # Prefer round strike near 732 for SPY puts
+            strike = round(float(strike))
+        occ = occ_symbol or ticket.get("occ_symbol") or occ_option_symbol(und, exp, opt_type, strike)
+        # Alpaca options: simple limit (brackets not universally supported on options)
+        order = {
+            "symbol": occ,
+            "qty": str(qty),
+            "side": side,
+            "type": "limit",
+            "time_in_force": "day",
+            "limit_price": f"{float(entry):.2f}",
+            "extended_hours": False,
+            "client_order_id": f"horsey-{ticket.get('ticket_id','ticket')}"[:48],
+        }
+        management = {
+            "style": "manual_oco_after_fill",
+            "note": "Alpaca paper options: submit long premium limit; manage stop/T1/T2 as child orders after fill (OCO).",
+            "stop_price": float(stop) if stop is not None else None,
+            "take_profit_1": float(t1) if t1 is not None else None,
+            "take_profit_2": float(ticket.get("target2")) if ticket.get("target2") is not None else None,
+            "scale_plan": (ticket.get("oco_bracket") or {}).get("scale_plan"),
+            "time_stop": ticket.get("time_stop"),
+            "underlying_trigger": ticket.get("underlying_trigger"),
+            "hard_invalidation_underlying": ticket.get("hard_invalidation_underlying"),
+        }
+        asset_class = "us_option"
+    else:
+        # Equity bracket
+        sym = (ticket.get("symbol") or "SPY").upper()
+        if side == "buy":
+            order = {
+                "symbol": sym,
+                "qty": str(qty),
+                "side": "buy",
+                "type": "limit",
+                "time_in_force": "day",
+                "limit_price": f"{float(entry):.2f}",
+                "order_class": "bracket",
+                "take_profit": {"limit_price": f"{float(t1):.2f}"},
+                "stop_loss": {"stop_price": f"{float(stop):.2f}"},
+                "client_order_id": f"horsey-{ticket.get('ticket_id','ticket')}"[:48],
+            }
+        else:
+            # short stock bracket
+            order = {
+                "symbol": sym,
+                "qty": str(qty),
+                "side": "sell",
+                "type": "limit",
+                "time_in_force": "day",
+                "limit_price": f"{float(entry):.2f}",
+                "order_class": "bracket",
+                "take_profit": {"limit_price": f"{float(t1):.2f}"},
+                "stop_loss": {"stop_price": f"{float(stop):.2f}"},
+                "client_order_id": f"horsey-{ticket.get('ticket_id','ticket')}"[:48],
+            }
+        management = {
+            "style": "native_bracket",
+            "stop_price": float(stop) if stop is not None else None,
+            "take_profit_1": float(t1) if t1 is not None else None,
+            "take_profit_2": float(ticket.get("target2")) if ticket.get("target2") is not None else None,
+            "time_stop": ticket.get("time_stop"),
+        }
+        asset_class = "us_equity"
+        occ = sym
+
+    payload = {
+        "host": ALPACA_PAPER_HOST,
+        "endpoint": "/v2/orders",
+        "method": "POST",
+        "mode": "paper_only",
+        "live_host_blocked": True,
+        "ticket_id": ticket.get("ticket_id"),
+        "setup_id": ticket.get("setup_id"),
+        "asset_class": asset_class,
+        "occ_symbol": occ if asset_class == "us_option" else None,
+        "firewall_verified": why,
+        "risk": {
+            "equity_ref": ticket.get("equity"),
+            "risk_pct_effective": ticket.get("risk_pct_effective"),
+            "dollar_risk_budget": ticket.get("dollar_risk_budget"),
+            "actual_dollar_risk": ticket.get("actual_dollar_risk"),
+            "quantity": qty,
+        },
+        "order": order,
+        "management_rules": management,
+        "disclaimer": DISCLAIMER,
+        "built_ct": iso_ct(),
+    }
+    return payload
+
+
+def alpaca_stage_ticket(ticket_id, dry_run=True, submit_paper=False, expiration=None, strike=None, occ_symbol=None):
+    ticket, rows = _blotter_ticket(ticket_id)
+    if not ticket:
+        raise SystemExit(f"ERROR: ticket {ticket_id} not found in {BLOTTER}")
+    payload = build_alpaca_paper_order(ticket, occ_symbol=occ_symbol, expiration=expiration, strike=strike)
+    # Persist dry-run artifact next to ticket (non-secret)
+    ticket["alpaca_paper_payload"] = payload
+    ticket["alpaca_dry_run_ct"] = iso_ct()
+    ticket["alpaca_host_lock"] = ALPACA_PAPER_HOST
+
+    if submit_paper and not dry_run:
+        # Transmit ONLY to paper host after re-checking lock + firewall
+        assert_paper_host(payload["host"])
+        if payload["host"] != ALPACA_PAPER_HOST:
+            raise RuntimeError("host lock mismatch")
+        resp = alpaca_request("POST", ALPACA_PAPER_HOST, "/v2/orders", body=payload["order"])
+        ticket["alpaca_order_id"] = resp.get("id") if isinstance(resp, dict) else None
+        ticket["alpaca_status"] = resp.get("status") if isinstance(resp, dict) else "submitted"
+        ticket["alpaca_submitted_ct"] = iso_ct()
+        ticket["status"] = "submitted_paper"
+        ajl(PAPER_ORDERS, {"ticket_id": ticket_id, "submitted_ct": iso_ct(), "order_id": ticket.get("alpaca_order_id"),
+                           "status": ticket.get("alpaca_status"), "symbol": payload["order"].get("symbol")})
+        try:
+            alpaca_status()
+        except Exception as e:
+            ticket["alpaca_sync_warning"] = str(e)[:200]
+        result = {"mode": "submitted_paper", "payload": payload, "response": _sanitize_order(resp) if isinstance(resp, dict) else resp}
+    else:
+        ticket["alpaca_status"] = "dry_run_validated"
+        result = {"mode": "dry_run", "payload": payload, "note": "Validated locally. Not transmitted. Re-run with --submit-paper after keys + human confirm."}
+
+    # Rewrite blotter with updated ticket
+    with open(BLOTTER, "w") as f:
+        for t in rows:
+            if t.get("ticket_id") == ticket_id:
+                f.write(json.dumps(ticket) + "\n")
+            else:
+                f.write(json.dumps(t) + "\n")
+    # Also stash latest dry-run under pod/
+    wj(P("pod", "alpaca_last_dry_run.json"), result)
+    return result
+
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
@@ -531,6 +956,23 @@ def main(argv=None):
     sp.add_parser("build-memos-index")
     sp.add_parser("bridge-ledger")
     pq = sp.add_parser("post-questions"); pq.add_argument("file")
+    # Alpaca Paper (hard-locked to paper-api.alpaca.markets)
+    asp = sp.add_parser("alpaca-status", help="Refresh sanitized Alpaca Paper account state")
+    asp.add_argument("--offline", action="store_true", help="Skip network; write awaiting_keys / offline note")
+    sp.add_parser("alpaca-sync", help="Alias of alpaca-status")
+    afo = sp.add_parser("alpaca-find-option")
+    afo.add_argument("--underlying", default="SPY")
+    afo.add_argument("--expiration", required=True)
+    afo.add_argument("--type", dest="opt_type", choices=["put", "call"], required=True)
+    afo.add_argument("--strike", type=float, required=True)
+    afo.add_argument("--premium", type=float)
+    astg = sp.add_parser("alpaca-stage-ticket")
+    astg.add_argument("--ticket-id", required=True)
+    astg.add_argument("--dry-run", action="store_true", default=True)
+    astg.add_argument("--submit-paper", action="store_true", help="Transmit to paper-api.alpaca.markets ONLY")
+    astg.add_argument("--expiration")
+    astg.add_argument("--strike", type=float)
+    astg.add_argument("--occ-symbol")
     a = ap.parse_args(argv)
     if a.cmd in ("status", "log-signal", "grade"):
         _housekeeping()
@@ -547,7 +989,12 @@ def main(argv=None):
         tk = size_ticket(a)
         if a.stage_paper and tk["verdict"] == "APPROVED_FOR_STAGING":
             ajl(BLOTTER, tk); tk["staged"] = True
-        print(json.dumps(tk, indent=2) if a.json else ticket_md(tk) + "\n\n" + json.dumps(tk, indent=2))
+        if a.json:
+            print(json.dumps(tk, indent=2))
+        else:
+            print(ticket_md(tk))
+            print()
+            print(json.dumps(tk, indent=2))
         return 0 if tk["verdict"] == "APPROVED_FOR_STAGING" else 2
     elif a.cmd == "log-signal":
         print(json.dumps(log_signal(a), indent=2))
@@ -558,6 +1005,26 @@ def main(argv=None):
             print(f" • {d['signal_id']} {d.get('agent_name')}: {d['grade_status']} R={d.get('realized_r')} brier={d.get('brier_error')}")
         print(json.dumps({k: {x: v.get(x) for x in ('graded_count', 'win_rate', 'avg_realized_r', 'brier_score', 'current_effective_weight')}
                           for k, v in sc.get("agents", {}).items()}, indent=2))
+    elif a.cmd in ("alpaca-status", "alpaca-sync"):
+        offline = bool(getattr(a, "offline", False))
+        st = alpaca_status(offline=offline)
+        print(json.dumps(st, indent=2))
+        print()
+        print("→ wrote %s · status=%s · mode=%s" % (PAPER_STATE, st.get("status"), st.get("mode")))
+    elif a.cmd == "alpaca-find-option":
+        print(json.dumps(alpaca_find_option(a.underlying, a.expiration, a.opt_type, a.strike, a.premium), indent=2))
+    elif a.cmd == "alpaca-stage-ticket":
+        # Default dry-run; --submit-paper opts into paper transmission
+        dry = not a.submit_paper
+        if a.submit_paper:
+            print("WARNING: submitting to PAPER host only:", ALPACA_PAPER_HOST, file=sys.stderr)
+        result = alpaca_stage_ticket(
+            a.ticket_id, dry_run=dry, submit_paper=a.submit_paper,
+            expiration=a.expiration, strike=a.strike, occ_symbol=a.occ_symbol,
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+    return 0
     return 0
 
 
