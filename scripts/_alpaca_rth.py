@@ -634,10 +634,10 @@ def push_vault_if_changed(pe, changed: bool, push: bool) -> Dict[str, Any]:
         out["vault_error"] = str(e)[:200]
     if push and changed:
         try:
-            subprocess.run(["git", "add", "vault/state.enc.json"], cwd=str(ROOT), check=False)
+            subprocess.run(["git", "add", "-f", "--", "vault/state.enc.json", "vault/manifest.json"], cwd=str(ROOT), check=False)
             # only commit if staged diff
             st = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=str(ROOT), capture_output=True, text=True)
-            if "vault/state.enc.json" in (st.stdout or ""):
+            if "vault/state.enc.json" in (st.stdout or "") or "vault/manifest.json" in (st.stdout or ""):
                 subprocess.run(
                     ["git", "commit", "-m", "vault: refresh state after Alpaca RTH tick"],
                     cwd=str(ROOT), check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

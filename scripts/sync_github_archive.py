@@ -504,7 +504,7 @@ def main():
     subprocess.run(["git", "add", "-A"], cwd=REPO_DIR, check=True)
     if vault_active:
         # Ensure encrypted artifacts are staged even if ignore rules drift
-        subprocess.run(["git", "add", "-f", "--", "vault/state.enc.json", "vault/app.enc.json", "vault/vault_meta.json", "index.html"], cwd=REPO_DIR, check=False)
+        subprocess.run(["git", "add", "-f", "--", "vault/state.enc.json", "vault/app.enc.json", "vault/vault_meta.json", "vault/manifest.json", "index.html"], cwd=REPO_DIR, check=False)
     # Safety: ensure nothing under pod/ was staged
     staged = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=REPO_DIR, capture_output=True, text=True, check=False)
     bad = [ln for ln in (staged.stdout or "").splitlines() if ln.startswith("pod/") or ln == "pod"]

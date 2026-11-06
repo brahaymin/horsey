@@ -15,7 +15,7 @@ If password missing: build/build-state exit 0 with a skip notice.
 """
 from __future__ import annotations
 
-import argparse, base64, json, os, re, shutil, sys, time
+import argparse, base64, gzip, hashlib, json, os, re, shutil, sys, time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,6 +32,7 @@ VAULT_DIR = ROOT / "vault"
 META_PATH = VAULT_DIR / "vault_meta.json"
 APP_ENC = VAULT_DIR / "app.enc.json"
 STATE_ENC = VAULT_DIR / "state.enc.json"
+MANIFEST_PATH = VAULT_DIR / "manifest.json"
 UNLOCKED = ROOT / "app_unlocked.html"
 GATE_SRC = ROOT / "vault_gate.html"
 ENV_VAULT = ROOT / ".env.vault"
@@ -90,10 +91,12 @@ def encrypt_blob(password: str, plaintext: bytes, meta: dict | None = None) -> d
     salt = b64d(meta["salt"])
     key = derive_key(password, salt, int(meta.get("iter") or ITERATIONS))
     iv = os.urandom(IV_LEN)
-    # AESGCM.encrypt returns ciphertext || tag (16 bytes)
-    ct = AESGCM(key).encrypt(iv, plaintext, None)
+    # Gzip plaintext BEFORE AES-GCM (comp:"gzip"); tag still authenticates compressed bytes
+    compressed = gzip.compress(plaintext, compresslevel=9)
+    ct = AESGCM(key).encrypt(iv, compressed, None)
     return {
-        "v": 1,
+        "v": 2,
+        "comp": "gzip",
         "alg": "AES-256-GCM",
         "kdf": "PBKDF2-SHA256",
         "iter": int(meta.get("iter") or ITERATIONS),
@@ -109,7 +112,10 @@ def decrypt_blob(password: str, envelope: dict) -> bytes:
     key = derive_key(password, salt, int(envelope.get("iter") or ITERATIONS))
     iv = b64d(envelope["iv"])
     ct = b64d(envelope["ct"])
-    return AESGCM(key).decrypt(iv, ct, None)
+    plain = AESGCM(key).decrypt(iv, ct, None)
+    if envelope.get("comp") == "gzip":
+        plain = gzip.decompress(plain)
+    return plain
 
 
 def inline_local_scripts(html: str) -> str:
@@ -247,6 +253,58 @@ def collect_state_files() -> dict:
     return files
 
 
+def _content_fingerprint(val) -> str:
+    if isinstance(val, (dict, list)):
+        blob = json.dumps(val, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    else:
+        blob = str(val)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def dedupe_files(files: dict) -> tuple[dict, dict]:
+    """Keep one copy of identical payloads; return (canonical_files, aliases).
+
+    aliases maps duplicate_path -> canonical_path. Prefer latest.* and shorter paths.
+    """
+    def score(path: str) -> tuple:
+        prefer = 0
+        if path in ("latest.json", "latest.md"):
+            prefer -= 200
+        if "/latest_" in path or path.endswith("/latest.json") or path.endswith("/latest.md"):
+            prefer -= 50
+        if path.startswith("pod/signals/latest"):
+            prefer -= 40
+        return (prefer, len(path), path)
+
+    by_fp: dict[str, str] = {}
+    out: dict = {}
+    aliases: dict = {}
+    for path, val in sorted(files.items(), key=lambda kv: score(kv[0])):
+        fp = _content_fingerprint(val)
+        if fp in by_fp:
+            aliases[path] = by_fp[fp]
+        else:
+            by_fp[fp] = path
+            out[path] = val
+    return out, aliases
+
+
+def write_manifest() -> dict:
+    """Public cache-busting hashes only — zero sensitive payload."""
+    def short(path: Path) -> str:
+        if not path.exists():
+            return ""
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+
+    man = {
+        "app_v": short(APP_ENC),
+        "state_v": short(STATE_ENC),
+        "updated_epoch": int(time.time()),
+    }
+    MANIFEST_PATH.write_text(json.dumps(man, indent=2) + "\n")
+    return man
+
+
 def build_app(password: str, meta: dict) -> dict:
     if not UNLOCKED.exists():
         # fallback to current index if unlock source missing
@@ -275,26 +333,29 @@ def build_app(password: str, meta: dict) -> dict:
     }
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     env = encrypt_blob(password, raw, meta)
-    APP_ENC.write_text(json.dumps(env, indent=2) + "\n")
+    APP_ENC.write_text(json.dumps(env, separators=(",", ":")) + "\n")
     return {"path": str(APP_ENC), "plain_bytes": len(raw), "enc_bytes": APP_ENC.stat().st_size}
 
 
 def build_state(password: str, meta: dict) -> dict:
     files = collect_state_files()
+    canonical, aliases = dedupe_files(files)
     payload = {
         "built_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "files": files,
+        "files": canonical,
+        "aliases": aliases,
     }
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     env = encrypt_blob(password, raw, meta)
-    # Strip accidental market fields — envelope already minimal
-    STATE_ENC.write_text(json.dumps(env, indent=2) + "\n")
+    STATE_ENC.write_text(json.dumps(env, separators=(",", ":")) + "\n")
     return {
         "path": str(STATE_ENC),
         "file_count": len(files),
+        "canonical_count": len(canonical),
+        "alias_count": len(aliases),
         "plain_bytes": len(raw),
         "enc_bytes": STATE_ENC.stat().st_size,
-        "sample_keys": sorted(files.keys())[:12],
+        "sample_keys": sorted(canonical.keys())[:12],
     }
 
 
@@ -306,7 +367,8 @@ def cmd_build(args):
     meta = ensure_meta()
     app = build_app(pw, meta)
     st = build_state(pw, meta)
-    print(json.dumps({"ok": True, "app": app, "state": st, "meta": {"salt": meta["salt"][:8] + "…", "iter": meta["iter"]}}, indent=2))
+    man = write_manifest()
+    print(json.dumps({"ok": True, "app": app, "state": st, "manifest": man, "meta": {"salt": meta["salt"][:8] + "…", "iter": meta["iter"]}}, indent=2))
     return 0
 
 
@@ -317,7 +379,8 @@ def cmd_build_state(args):
         return 0
     meta = ensure_meta()
     st = build_state(pw, meta)
-    print(json.dumps({"ok": True, "state": st}, indent=2))
+    man = write_manifest()
+    print(json.dumps({"ok": True, "state": st, "manifest": man}, indent=2))
     return 0
 
 
@@ -384,11 +447,12 @@ def cmd_activate(args):
             cwd=str(ROOT), check=False, capture_output=True, text=True,
         )
     # Ensure vault + gate index are addable
-    subprocess.run(["git", "add", "-f", "--", "index.html", "vault", ".gitignore", ".nojekyll"], cwd=str(ROOT), check=False)
+    subprocess.run(["git", "add", "-f", "--", "index.html", "vault/app.enc.json", "vault/state.enc.json", "vault/vault_meta.json", "vault/manifest.json", ".gitignore", ".nojekyll"], cwd=str(ROOT), check=False)
 
     meta = ensure_meta()
     app = build_app(pw, meta)
     st = build_state(pw, meta)
+    man = write_manifest()
     # Verify working tree intact
     intact = all((ROOT / x).exists() for x in ["app_unlocked.html", "js/feed-adapter.js", "latest.json", "pod/memos_index.json"])
     print(json.dumps({
@@ -396,6 +460,7 @@ def cmd_activate(args):
         "working_tree_intact": intact,
         "app": app,
         "state": st,
+        "manifest": man,
         "note": "Ready to commit+push when you choose. No push performed by activate.",
     }, indent=2))
     return 0 if intact else 1
@@ -417,6 +482,7 @@ def cmd_verify(args):
         "html_len": len(app.get("html") or ""),
         "app_files": list((app.get("files") or {}).keys()),
         "state_files": len(st.get("files") or {}),
+        "state_aliases": len(st.get("aliases") or {}),
         "has_latest": "latest.json" in (st.get("files") or {}),
         "has_memos": "pod/memos_index.json" in (st.get("files") or {}),
         "has_blotter": "pod/ledger/paper_blotter.jsonl" in (st.get("files") or {}),

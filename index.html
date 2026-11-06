@@ -4,6 +4,9 @@
 <title>Horsey Command Desk — Secure Access</title>
 <meta name="robots" content="noindex,nofollow">
 <meta name="description" content="Private AES-256 vault login for the Horsey command desk.">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preload" as="script" href="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js">
+<link rel="preload" as="script" href="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js">
 <style>
 :root{--bg:#070a10;--card:#0f1520;--line:#243049;--txt:#e8edf7;--mut:#8b97b0;--acc:#38bdf8;--neg:#f43f5e;--pos:#22c55e;--warn:#f59e0b}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--txt);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif}
@@ -33,7 +36,6 @@ button.ghost{background:transparent}
  <form class="card" id="vaultForm" method="post" action="#" autocomplete="on">
   <div class="lockico" aria-hidden="true">🔒</div>
   <div class="brand">Horsey Command Desk<small>Private Executive Access</small></div>
-  <!-- Username field so password managers save/autofill cleanly -->
   <label class="visually-hidden" for="vaultUser">Username</label>
   <input class="visually-hidden" type="text" id="vaultUser" name="username" value="horsey-ceo" autocomplete="username" tabindex="-1" aria-hidden="true">
   <label for="vaultPass">CEO password</label>
@@ -54,6 +56,7 @@ button.ghost{background:transparent}
 "use strict";
 const APP_URL = "./vault/app.enc.json";
 const STATE_URL = "./vault/state.enc.json";
+const MANIFEST_URL = "./vault/manifest.json";
 const DK_LS = "horsey_vault_dk";
 const META_LS = "horsey_vault_meta";
 const nativeFetch = window.fetch.bind(window);
@@ -61,6 +64,8 @@ let VAULT_FILES = Object.create(null);
 let activeKey = null;
 let activeSaltB64 = null;
 let stateRefreshAt = 0;
+let currentStateV = null;
+let currentAppV = null;
 const STATE_REFRESH_MS = 4000;
 
 const $ = (id) => document.getElementById(id);
@@ -97,11 +102,27 @@ async function importRawKey(b64){
 async function exportRawKey(key){
   return bytesToB64(new Uint8Array(await crypto.subtle.exportKey("raw", key)));
 }
+async function gunzipToText(buf){
+  if (typeof DecompressionStream === "undefined") {
+    throw new Error("This browser cannot decompress the vault (needs DecompressionStream).");
+  }
+  const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return await new Response(stream).text();
+}
 async function decryptEnvelope(key, env){
   const iv = b64ToBytes(env.iv);
-  const ct = b64ToBytes(env.ct); // ciphertext || tag
-  const pt = await crypto.subtle.decrypt({ name:"AES-GCM", iv }, key, ct);
-  return new TextDecoder().decode(pt);
+  const ct = b64ToBytes(env.ct);
+  const plainBuf = await crypto.subtle.decrypt({ name:"AES-GCM", iv }, key, ct);
+  if (env.comp === "gzip") return await gunzipToText(plainBuf);
+  return new TextDecoder().decode(plainBuf);
+}
+function expandAliases(payload){
+  const files = Object.assign(Object.create(null), (payload && payload.files) || {});
+  const aliases = (payload && payload.aliases) || {};
+  for (const [alias, target] of Object.entries(aliases)) {
+    if (Object.prototype.hasOwnProperty.call(files, target)) files[alias] = files[target];
+  }
+  return files;
 }
 function guessType(path){
   if (path.endsWith(".json") || path.endsWith(".jsonl")) return "application/json; charset=utf-8";
@@ -114,37 +135,66 @@ function guessType(path){
 function normalizePath(url){
   try {
     const u = (typeof url === "string") ? new URL(url, location.href) : new URL(url.url, location.href);
-    if (u.origin !== location.origin) return null; // external
+    if (u.origin !== location.origin) return null;
     let path = u.pathname.replace(/^\.\//,"");
-    // strip leading /repo base if GitHub Pages project site
-    const base = location.pathname.replace(/\/[^/]*$/, "/"); // directory of index
+    const base = location.pathname.replace(/\/[^/]*$/, "/");
     if (path.startsWith(base)) path = path.slice(base.length);
     path = path.replace(/^\/+/, "");
     return path;
   } catch(e){ return null; }
 }
+async function fetchManifest(){
+  const r = await nativeFetch(MANIFEST_URL + "?_cb=" + Date.now(), { cache:"no-store" });
+  if (!r.ok) return null;
+  return r.json();
+}
+async function fetchVaultEnvelopes(){
+  let man = null;
+  try { man = await fetchManifest(); } catch(e){}
+  const appUrl = (man && man.app_v) ? (APP_URL + "?v=" + encodeURIComponent(man.app_v)) : (APP_URL + "?_cb=" + Date.now());
+  const stateUrl = (man && man.state_v) ? (STATE_URL + "?v=" + encodeURIComponent(man.state_v)) : (STATE_URL + "?_cb=" + Date.now());
+  const cacheMode = (man && man.app_v && man.state_v) ? "force-cache" : "no-store";
+  const [appR, stateR] = await Promise.all([
+    nativeFetch(appUrl, { cache: cacheMode }),
+    nativeFetch(stateUrl, { cache: cacheMode })
+  ]);
+  if (!appR.ok || !stateR.ok) throw new Error("Vault files unavailable (" + appR.status + "/" + stateR.status + ").");
+  const [appEnv, stateEnv] = await Promise.all([appR.json(), stateR.json()]);
+  return { man, appEnv, stateEnv };
+}
+// Kick off envelope download the instant the gate opens (parallel with password typing / auto-unlock)
+let bundlePromise = fetchVaultEnvelopes().catch((e) => { bundlePromise = null; throw e; });
+
 async function refreshStateIfNeeded(force){
   const now = Date.now();
-  if (!force && now - stateRefreshAt < STATE_REFRESH_MS) return;
-  if (!activeKey) return;
+  if (!force && now - stateRefreshAt < STATE_REFRESH_MS) return false;
+  if (!activeKey) return false;
   stateRefreshAt = now;
   try {
-    const r = await nativeFetch(STATE_URL + "?_cb=" + now, { cache:"no-store" });
-    if (!r.ok) return;
+    let man = null;
+    try { man = await fetchManifest(); } catch(e){}
+    if (!force && man && man.state_v && man.state_v === currentStateV) {
+      return false; // 120-byte poll — nothing changed
+    }
+    const stateUrl = (man && man.state_v)
+      ? (STATE_URL + "?v=" + encodeURIComponent(man.state_v))
+      : (STATE_URL + "?_cb=" + now);
+    const r = await nativeFetch(stateUrl, { cache: (man && man.state_v) ? "force-cache" : "no-store" });
+    if (!r.ok) return false;
     const env = await r.json();
     const txt = await decryptEnvelope(activeKey, env);
     const payload = JSON.parse(txt);
-    if (payload && payload.files) Object.assign(VAULT_FILES, payload.files);
-  } catch(e){ /* keep previous map */ }
+    Object.assign(VAULT_FILES, expandAliases(payload));
+    if (man && man.state_v) currentStateV = man.state_v;
+    return true;
+  } catch(e){ return false; }
 }
 function installFetchWrapper(){
   window.fetch = async function(input, init){
     try {
       const path = normalizePath(input);
-      if (path == null) return nativeFetch(input, init); // external (Alpaca etc.)
-      // allow vault ciphertext itself through
+      if (path == null) return nativeFetch(input, init);
       if (path.startsWith("vault/")) return nativeFetch(input, init);
-      // cache-bust → maybe refresh state
       const href = (typeof input === "string") ? input : (input && input.url) || "";
       if (/[?&]_cb=/.test(href) || /[?&]t=/.test(href)) await refreshStateIfNeeded(false);
       if (Object.prototype.hasOwnProperty.call(VAULT_FILES, path)) {
@@ -152,7 +202,6 @@ function installFetchWrapper(){
         if (typeof body !== "string") body = JSON.stringify(body);
         return new Response(body, { status:200, headers:{ "Content-Type": guessType(path), "X-Horsey-Vault":"1" }});
       }
-      // try without leading ./ variants already normalized; 404 soft
       return new Response(JSON.stringify({ error:"not_in_vault", path }), { status:404, headers:{ "Content-Type":"application/json" }});
     } catch(e) {
       return nativeFetch(input, init);
@@ -160,14 +209,12 @@ function installFetchWrapper(){
   };
 }
 function patchHtml(html){
-  // Ensure lock button exists near bell
   if (!/id="vaultLockBtn"/.test(html)) {
     html = html.replace(
       /(<button class="bellbtn" id="bellBtn")/,
       '<button type="button" class="bellbtn" id="vaultLockBtn" title="Lock vault" aria-label="Lock">🔒</button>\n $1'
     );
   }
-  // Inject tiny boot that wires Lock click after DOM ready
   const boot = `<script>(function(){function wire(){var b=document.getElementById("vaultLockBtn");if(!b)return;b.onclick=function(){try{localStorage.removeItem("${DK_LS}");sessionStorage.removeItem("${DK_LS}");localStorage.removeItem("${META_LS}");}catch(e){}location.reload();};}if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",wire);else wire();})();<\/script>`;
   if (html.includes("</body>")) html = html.replace("</body>", boot + "</body>");
   else html += boot;
@@ -175,41 +222,60 @@ function patchHtml(html){
 }
 async function mountApp(appPayload){
   const html = patchHtml(appPayload.html || "");
-  // Merge any app.files into VAULT_FILES (e.g. feed-adapter already inlined, but keep map)
   if (appPayload.files) Object.assign(VAULT_FILES, appPayload.files);
   installFetchWrapper();
   document.open();
   document.write(html);
   document.close();
 }
-async function unlockWithPassword(password, remember){
-  const appEnv = await (await nativeFetch(APP_URL + "?_cb=" + Date.now(), { cache:"no-store" })).json();
-  const stateEnv = await (await nativeFetch(STATE_URL + "?_cb=" + Date.now(), { cache:"no-store" })).json();
-  const salt = b64ToBytes(appEnv.salt);
-  const iter = appEnv.iter || 600000;
-  const key = await deriveKey(password, salt, iter);
+async function unlockWithBundle(key, remember, metaSalt, metaIter){
+  let bundle;
+  try {
+    bundle = await (bundlePromise || fetchVaultEnvelopes());
+  } catch (e) {
+    bundlePromise = fetchVaultEnvelopes();
+    bundle = await bundlePromise;
+  }
+  const { man, appEnv, stateEnv } = bundle;
+  if (metaSalt && appEnv.salt !== metaSalt) throw new Error("Vault key changed — please unlock with your password.");
   let appTxt, stateTxt;
   try {
-    appTxt = await decryptEnvelope(key, appEnv);
-    stateTxt = await decryptEnvelope(key, stateEnv);
+    [appTxt, stateTxt] = await Promise.all([
+      decryptEnvelope(key, appEnv),
+      decryptEnvelope(key, stateEnv)
+    ]);
   } catch (e) {
     throw new Error("Incorrect password. Please try again.");
   }
   const appPayload = JSON.parse(appTxt);
   const statePayload = JSON.parse(stateTxt);
-  VAULT_FILES = Object.assign(Object.create(null), statePayload.files || {});
+  VAULT_FILES = expandAliases(statePayload);
   activeKey = key;
   activeSaltB64 = appEnv.salt;
   stateRefreshAt = Date.now();
-  const raw = await exportRawKey(key);
-  const store = remember ? localStorage : sessionStorage;
-  const other = remember ? sessionStorage : localStorage;
-  try {
-    other.removeItem(DK_LS); other.removeItem(META_LS);
-    store.setItem(DK_LS, raw);
-    store.setItem(META_LS, JSON.stringify({ salt: appEnv.salt, iter }));
-  } catch(e){}
+  currentAppV = man && man.app_v || null;
+  currentStateV = man && man.state_v || null;
+  if (remember != null) {
+    const raw = await exportRawKey(key);
+    const store = remember ? localStorage : sessionStorage;
+    const other = remember ? sessionStorage : localStorage;
+    try {
+      other.removeItem(DK_LS); other.removeItem(META_LS);
+      store.setItem(DK_LS, raw);
+      store.setItem(META_LS, JSON.stringify({ salt: appEnv.salt, iter: metaIter || appEnv.iter || 600000 }));
+    } catch(e){}
+  }
   await mountApp(appPayload);
+}
+async function unlockWithPassword(password, remember){
+  // Ensure envelopes are in flight / ready while we derive the key
+  if (!bundlePromise) bundlePromise = fetchVaultEnvelopes();
+  const saltHintP = bundlePromise.then(b => b.appEnv).catch(()=>null);
+  const appEnvHint = await saltHintP;
+  const salt = b64ToBytes((appEnvHint && appEnvHint.salt) || (await (bundlePromise = fetchVaultEnvelopes()).then(b=>b.appEnv)).salt);
+  const iter = (appEnvHint && appEnvHint.iter) || 600000;
+  const key = await deriveKey(password, salt, iter);
+  await unlockWithBundle(key, remember, null, iter);
 }
 async function tryAutoUnlock(){
   let raw = null, meta = null;
@@ -219,18 +285,14 @@ async function tryAutoUnlock(){
   }
   if (!raw || !meta || !meta.salt) return false;
   try {
+    if (!bundlePromise) bundlePromise = fetchVaultEnvelopes();
     const key = await importRawKey(raw);
-    const appEnv = await (await nativeFetch(APP_URL + "?_cb=" + Date.now(), { cache:"no-store" })).json();
-    if (appEnv.salt !== meta.salt) return false;
-    const appTxt = await decryptEnvelope(key, appEnv);
-    const stateEnv = await (await nativeFetch(STATE_URL + "?_cb=" + Date.now(), { cache:"no-store" })).json();
-    const stateTxt = await decryptEnvelope(key, stateEnv);
-    VAULT_FILES = Object.assign(Object.create(null), JSON.parse(stateTxt).files || {});
-    activeKey = key; activeSaltB64 = meta.salt; stateRefreshAt = Date.now();
-    await mountApp(JSON.parse(appTxt));
+    await unlockWithBundle(key, null, meta.salt, meta.iter);
     return true;
   } catch(e) {
     try { localStorage.removeItem(DK_LS); sessionStorage.removeItem(DK_LS); } catch(_){}
+    // Restart preload for manual unlock
+    bundlePromise = fetchVaultEnvelopes().catch(()=>{ bundlePromise = null; });
     return false;
   }
 }
@@ -260,7 +322,6 @@ $("vaultForm").addEventListener("submit", async (ev) => {
   }
 });
 
-// Auto-unlock from remembered device key
 tryAutoUnlock().then((ok) => { if (!ok) $("vaultPass").focus(); });
 })();
 </script>
