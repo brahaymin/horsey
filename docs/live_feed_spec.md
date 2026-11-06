@@ -1,12 +1,15 @@
 # Live Feed Spec: `window.SPYGammaFeed`
 
-The dashboard (`index.html`) never fetches data directly. It subscribes to **`js/feed-adapter.js`**:
+The dashboard (`index.html`) never fetches SPY/GEX snapshot data directly. It subscribes to **`js/feed-adapter.js`**:
 
 ```js
 SPYGammaFeed.onSnapshot((snap, meta) => renderSnapshot(snap, meta)); // full re-render
 SPYGammaFeed.onTick(tick => applyLiveTick(tick));                     // hero strip, level ruler, live badge
 SPYGammaFeed.onStatus(s => ...);                                      // "Source: GitHub Archive · Auto-Refresh 60s"
+SPYGammaFeed.onPoll(info => ...);                                     // after every pollNow (timer / wake / manual)
 ```
+
+`LiveHub` in `index.html` also polls `pod/memos_index.json`, `pod/signals/latest_pod_state.json`, `pod/ledger/paper_blotter.jsonl`, `pod/ceo_questions.json`, and `pod/ceo_decisions/latest_decisions.json` on each `onPoll`, and raises in-dashboard toast banners when fingerprints change (never on initial boot baseline).
 
 ## Modes
 
@@ -18,6 +21,21 @@ SPYGammaFeed.onStatus(s => ...);                                      // "Source
 
 Set the mode in the gear (⚙) modal, with `SPYGammaFeed.configure({mode:"rest", restUrl:"https://…", pollSec:15})`, or with URL params: `?feed=websocket&url=wss://…`.
 The config is saved in the browser's `localStorage`.
+
+## `pollNow()` / `checkUpdates()` + phone wake catch-up
+
+```js
+await SPYGammaFeed.pollNow("manual");   // alias: checkUpdates()
+```
+
+Fires on:
+
+- the auto-refresh interval (`pollSec`, default 60s) when `autoRefresh` is enabled
+- `document.visibilitychange` → `visible` (phone unlock / tab return)
+- `window` `focus`
+- `online`
+
+Checks are throttled to **≥ 5 seconds** apart (pass `"force"` to bypass). Live fetches append `?_cb=<15s-bucket>` and use `{ cache: "no-store" }` so GitHub Pages `max-age=600` does not stall trading-hour updates.
 
 ## Tick schema (all fields optional)
 
@@ -36,6 +54,10 @@ If a vendor's payload has a different shape, define a mapper **before** the feed
 ```js
 window.SPYGammaFeedMapper = (json) => ({ tick: { spy_price: json.last, vix: json.vix_last } });
 ```
+
+## In-dashboard banners
+
+`LiveHub` (`#liveToastHost`) shows temporary high-contrast toasts for market snapshots, CIO/pod memos, CEO questions, and blotter tickets. Auto-dismiss (~14s, configurable in the Data Source modal) pauses on hover/touch. A 🔔 bell keeps the last 5 alerts. Use **🔔 Test Banner** in the Data Source modal or bell popover to preview on phone/desktop.
 
 ## Full snapshot schema
 See any `snapshots/YYYY/MM/YYYY-MM-DD/*.json` (written by `scripts/sync_github_archive.py`). The keys are `summary`, `spy_detail`, `gex_scopes`, `intraday_30m`, `daily_15d`, `volatility_table`, `vol_term_structure`, `assets_table`, `futures_table`, `verified_headlines`, `gex_meta` and `md_rel_path`.

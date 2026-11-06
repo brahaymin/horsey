@@ -100,12 +100,54 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
 .qok{color:var(--pos);font-weight:700}.qwarn{color:var(--warn);font-weight:700}.syncbox{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:8px}
 .syncbox input{width:100%;box-sizing:border-box}.syncbox ul{margin:6px 0 8px 18px;padding:0;font-size:12.5px}
 </style>
+
+<style>
+/* ---- Live update toast banners + bell tray ---- */
+#liveToastHost{position:fixed;top:max(10px,env(safe-area-inset-top,10px));left:50%;transform:translateX(-50%);z-index:80;width:calc(100vw - 20px);max-width:640px;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.live-banner{pointer-events:auto;background:linear-gradient(180deg,#1a2740 0%,#111827 100%);border:1px solid var(--acc);border-radius:14px;box-shadow:0 14px 42px rgba(0,0,0,.55),0 0 0 1px rgba(56,189,248,.18);padding:12px 14px 8px;animation:liveIn .32s ease;overflow:hidden;position:relative}
+.live-banner.kind-market{border-color:var(--acc)}.live-banner.kind-cio{border-color:#f59e0b}.live-banner.kind-pod{border-color:var(--vio)}.live-banner.kind-ceo{border-color:#10b981}.live-banner.kind-test{border-color:var(--warn)}
+@keyframes liveIn{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}
+.live-banner .lb-top{display:flex;gap:10px;align-items:flex-start}
+.live-banner .lb-ico{font-size:20px;line-height:1;flex:0 0 auto;margin-top:2px}
+.live-banner .lb-body{flex:1;min-width:0}
+.live-banner .lb-badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--acc);margin-bottom:2px}
+.live-banner.kind-cio .lb-badge{color:#fbbf24}.live-banner.kind-pod .lb-badge{color:#c4b5fd}.live-banner.kind-ceo .lb-badge{color:#6ee7b7}
+.live-banner .lb-badge .pulse{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 0 0 currentColor;animation:pulse 1.4s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(56,189,248,.55)}70%{box-shadow:0 0 0 8px rgba(56,189,248,0)}100%{box-shadow:0 0 0 0 rgba(56,189,248,0)}}
+.live-banner .lb-title{font-weight:800;font-size:15px;line-height:1.25;margin:0 0 3px}
+.live-banner .lb-sum{color:var(--mut);font-size:12.8px;line-height:1.35;font-variant-numeric:tabular-nums}
+.live-banner .lb-time{color:var(--mut);font-size:11.5px;margin-top:4px}
+.live-banner .lb-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center}
+.live-banner .lb-actions button{min-height:36px;padding:7px 12px;border-radius:999px;font-weight:700;font-size:12.5px}
+.live-banner .lb-actions .primary{background:#0c4a6e;border-color:var(--acc);color:#e0f2fe}
+.live-banner .lb-x{min-width:36px;min-height:36px;border-radius:999px;flex:0 0 auto}
+.live-banner .lb-bar{position:absolute;left:0;right:0;bottom:0;height:3px;background:rgba(56,189,248,.15)}
+.live-banner .lb-bar>i{display:block;height:100%;width:100%;background:var(--acc);transform-origin:left center;animation:none}
+.bellbtn{position:relative;min-width:36px;min-height:36px;border-radius:999px;padding:6px 10px;font-size:14px}
+.bellbtn .bcnt{position:absolute;top:-4px;right:-4px;background:var(--neg);color:#fff;border-radius:999px;font-size:10px;font-weight:800;min-width:16px;height:16px;padding:0 4px;display:none;align-items:center;justify-content:center;line-height:1}
+.bellbtn.has .bcnt{display:inline-flex}
+.bellpop{display:none;position:absolute;right:0;top:calc(100% + 6px);width:min(92vw,360px);background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.45);z-index:70;padding:8px;max-height:70vh;overflow:auto}
+.bellwrap{position:relative}.bellpop.open{display:block}
+.bellpop h3{margin:4px 8px 8px;font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em}
+.bellpop .bi{padding:8px;border:1px solid var(--line);border-radius:10px;margin:6px 0;cursor:pointer;background:var(--panel2)}
+.bellpop .bi:hover{border-color:var(--acc)}.bellpop .bi .t{font-weight:700;font-size:13px}.bellpop .bi .s{color:var(--mut);font-size:12px;margin-top:2px}
+.bellpop .empty{color:var(--mut);padding:12px;text-align:center;font-size:13px}
+.lastpill{font-size:11.5px;padding:4px 9px;border-radius:999px;border:1px solid var(--line);background:var(--panel2);color:var(--mut);cursor:pointer;display:none}
+.lastpill.show{display:inline-flex;align-items:center;gap:5px}
+.lastpill b{color:var(--txt);font-weight:700}
+@media(max-width:620px){.live-banner .lb-title{font-size:14.5px}.src #srcLbl{max-width:42vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:bottom}}
+</style>
 </head><body>
 <div class="topbar"><div class="wrap">
  <div class="brand">SPY Gamma Structure &amp; Regime Monitor<small id="asof">Loading…</small></div>
  <select id="snapSel" aria-label="Historical snapshot"></select>
  <button id="qbBrief" class="ceob">📋 CEO Briefing</button>
  <button class="src" id="srcBtn" title="Data source / live feed settings"><span class="dot" id="srcDot"></span><span id="srcLbl">Source: GitHub Archive</span> ⚙</button>
+ <span class="bellwrap"><button class="bellbtn" id="bellBtn" title="Recent live updates" aria-label="Recent updates">🔔<span class="bcnt" id="bellCnt">0</span></button>
+  <div class="bellpop" id="bellPop" role="menu"><h3>Recent updates</h3><div id="bellList" class="empty">No updates yet — alerts appear when new snapshots, briefings, or tickets land.</div>
+   <div class="row" style="margin-top:8px;justify-content:space-between"><button type="button" id="bellTest" style="font-size:12px">🔔 Test Banner</button><button type="button" id="bellClear" style="font-size:12px">Clear</button></div>
+  </div></span>
+ <button type="button" class="lastpill" id="lastUpPill" title="Re-open last update">🔔 Last update</button>
  <span id="liveBadge" class="pill" style="display:none"></span>
  <span class="grow"></span>
  <div class="row qb">
@@ -245,6 +287,7 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
  </div>
 </section>
 </main>
+<div id="liveToastHost" aria-live="polite" aria-relevant="additions"></div>
 <footer class="wrap">Zero trade ideas · Public Cboe &amp; Yahoo Finance feeds · All times Central Time (CT, America/Chicago)<br>Informational market-structure description only. GEX is a model proxy from open interest; zero-γ is a model estimate.</footer>
 
 <div class="modal" id="feedModal" role="dialog" aria-modal="true"><div class="inner">
@@ -257,7 +300,12 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
  <label for="fmWs">WebSocket URL</label><input type="url" id="fmWs" placeholder="wss://your-feed.example.com/stream">
  <label for="fmPoll">Poll interval (seconds)</label><input type="number" id="fmPoll" min="5" value="60">
  <label class="opt"><input type="checkbox" id="fmAuto"><span>Auto-refresh enabled</span></label>
- <div class="row" style="margin-top:12px;justify-content:flex-end"><button id="fmReset">Reset to default</button><button id="fmSave" class="on">Save &amp; Connect</button></div>
+ <label for="fmToastSec">Banner auto-dismiss (seconds)</label><input type="number" id="fmToastSec" min="5" max="60" value="14">
+ <label class="opt"><input type="checkbox" id="fmBrowserNote"><span>Also try browser Notification API (when permitted)</span></label>
+ <div class="row" style="margin-top:12px;gap:8px;justify-content:space-between;flex-wrap:wrap">
+  <button type="button" id="fmTestBanner">🔔 Test Banner</button>
+  <div class="row" style="gap:8px"><button id="fmReset">Reset to default</button><button id="fmSave" class="on">Save &amp; Connect</button></div>
+ </div>
  <p class="note" id="fmStat"></p>
 </div></div>
 <script>
@@ -285,7 +333,9 @@ const hlines={id:"hlines",afterDatasetsDraw(c,a,o){const L=o&&o.lines;if(!L)retu
 if(HAS_CHART)Chart.register(vlines,hlines);
 
 
-async function getJSON(u){const r=await fetch(u,{cache:"no-cache"});if(!r.ok)throw new Error(u+" → HTTP "+r.status);return r.json()}
+function cacheBust(u){const sep=String(u).includes("?")?"&":"?";return u+sep+"_cb="+Math.floor(Date.now()/15000)}
+async function getJSON(u){const r=await fetch(cacheBust(u),{cache:"no-store"});if(!r.ok)throw new Error(u+" → HTTP "+r.status);return r.json()}
+async function getTextCB(u){const r=await fetch(cacheBust(u),{cache:"no-store"});if(!r.ok)throw new Error(u+" → HTTP "+r.status);return r.text()}
 let IDX=null,S=null,LOG=null,CUR=0,MDTXT="",charts={},st={scope:"next_session",mode:"net",px:"intraday",rs:"d1_pct",sortK:null,sortDir:-1,tab:"briefings",mdRaw:false};
 const LIVE={};
 function btns(id,items,key,fn){const w=$(id);w.innerHTML="";items.forEach(([v,l])=>{const b=document.createElement("button");b.textContent=l;b.dataset.v=v;b.onclick=()=>{st[key]=v;[...w.children].forEach(x=>x.classList.toggle("on",x.dataset.v===v));fn()};if(st[key]===v)b.classList.add("on");w.appendChild(b)})}
@@ -437,7 +487,7 @@ function fixSticky(){$("tabs").style.top=document.querySelector(".topbar").offse
 /* ---------- markdown report ---------- */
 let mdFor=null;
 async function loadMd(){const href=$("lnkMd").getAttribute("href");if(!href||mdFor===href)return;mdFor=href;$("md").textContent="Loading…";
- try{MDTXT=await (await fetch(href,{cache:"no-cache"})).text();drawMd()}catch(x){$("md").textContent="Failed to load report: "+x.message;mdFor=null}}
+ try{MDTXT=await (await fetch(cacheBust(href),{cache:"no-store"})).text();drawMd()}catch(x){$("md").textContent="Failed to load report: "+x.message;mdFor=null}}
 function drawMd(){if(st.mdRaw||typeof marked==="undefined")$("md").innerHTML="<pre>"+esc(MDTXT)+"</pre>";else{$("md").innerHTML=marked.parse(MDTXT);$("md").querySelectorAll("a").forEach(a=>{a.target="_blank";a.rel="noopener"})}
  $("mdView").classList.toggle("on",!st.mdRaw);$("mdRaw").classList.toggle("on",st.mdRaw)}
 $("mdView").onclick=()=>{st.mdRaw=false;drawMd()};$("mdRaw").onclick=()=>{st.mdRaw=true;drawMd()};
@@ -446,7 +496,7 @@ $("mdCopy").onclick=async()=>{try{await navigator.clipboard.writeText(MDTXT);$("
 let pbLoaded=false;
 const slug=s=>s.toLowerCase().replace(/[^\w\s-]/g,"").trim().replace(/\s/g,"-");
 async function loadPlaybook(){if(pbLoaded)return;pbLoaded=true;
- try{const t=await (await fetch("docs/day_trading_methodologies_and_50_mistakes.md",{cache:"no-cache"})).text();
+ try{const t=await (await fetch(cacheBust("docs/day_trading_methodologies_and_50_mistakes.md"),{cache:"no-store"})).text();
   const pb=$("pb");pb.innerHTML=typeof marked!=="undefined"?marked.parse(t):"<pre>"+esc(t)+"</pre>";
   pb.querySelectorAll("h1,h2,h3").forEach(h=>h.id=slug(h.textContent));pb.querySelectorAll("a").forEach(a=>{a.target="_blank";a.rel="noopener"});
   let cat="";const cats=[];[...pb.children].forEach(el=>{if(el.tagName==="H3"&&/^Category/.test(el.textContent)){cat=el.textContent;cats.push(cat)}if(el.tagName==="H2")cat="";
@@ -477,13 +527,18 @@ async function load(i){CUR=i;$("snapSel").value=i;const meta=IDX.snapshots[i];
 /* ---------- feed modal ---------- */
 const F=window.SPYGammaFeed;
 F.onSnapshot(renderSnapshot);F.onTick(applyLiveTick);F.onLog(r=>{LOG=r;if(S&&st.px==="log")drawPx()});
-F.onIndex(idx=>{const wasLatest=CUR===0,prevTop=IDX&&IDX.snapshots[0]?.id;fillIndex(idx);if(prevTop&&prevTop!==idx.snapshots[0]?.id){if(wasLatest)load(0);else{const i=idx.snapshots.findIndex(s=>s.id===prevTop);}}});
+F.onIndex(idx=>{const wasLatest=CUR===0,prevMeta=IDX&&IDX.snapshots[0],prevTop=prevMeta&&prevMeta.id;window.__prevSnapMeta=prevMeta||null;fillIndex(idx);if(prevTop&&prevTop!==idx.snapshots[0]?.id){if(wasLatest){load(0).then(()=>{if(window.LiveHub)LiveHub.onNewSnapshot(idx.snapshots[0],prevMeta,true)}).catch(()=>{});}else{const i=idx.snapshots.findIndex(s=>s.id===prevTop);if(i>=0){CUR=i;$("snapSel").value=i;}if(window.LiveHub)LiveHub.onNewSnapshot(idx.snapshots[0],prevMeta,false);}}});
 F.onStatus(s=>{$("srcLbl").textContent=s.label;$("srcDot").className="dot "+s.state;$("fmStat").textContent=`State: ${s.state}${s.lastUpdate?" · last update "+s.lastUpdate.toLocaleTimeString("en-US",{timeZone:"America/Chicago"})+" CT":""}`});
-function openFm(){const c=F.config;document.querySelectorAll('input[name=fm]').forEach(r=>r.checked=r.value===c.mode);$("fmRest").value=c.restUrl||"";$("fmWs").value=c.wsUrl||"";$("fmPoll").value=c.pollSec;$("fmAuto").checked=!!c.autoRefresh;$("feedModal").classList.add("open")}
+function openFm(){const c=F.config;document.querySelectorAll('input[name=fm]').forEach(r=>r.checked=r.value===c.mode);$("fmRest").value=c.restUrl||"";$("fmWs").value=c.wsUrl||"";$("fmPoll").value=c.pollSec;$("fmAuto").checked=!!c.autoRefresh;
+ try{const t=JSON.parse(localStorage.getItem("horsey_live_toast")||"{}");if($("fmToastSec"))$("fmToastSec").value=t.dismissSec||14;if($("fmBrowserNote"))$("fmBrowserNote").checked=!!t.browserNote}catch(e){if($("fmToastSec"))$("fmToastSec").value=14}
+ $("feedModal").classList.add("open")}
 $("srcBtn").onclick=openFm;$("fmClose").onclick=()=>$("feedModal").classList.remove("open");$("feedModal").onclick=e=>{if(e.target.id==="feedModal")$("feedModal").classList.remove("open")};
-$("fmSave").onclick=()=>{const mode=document.querySelector('input[name=fm]:checked')?.value||"github_archive";F.configure({mode,restUrl:$("fmRest").value.trim(),wsUrl:$("fmWs").value.trim(),pollSec:Math.max(5,+$("fmPoll").value||60),autoRefresh:$("fmAuto").checked});$("feedModal").classList.remove("open")};
-$("fmReset").onclick=()=>{F.reset();openFm()};
-document.addEventListener("keydown",e=>{if(e.key==="Escape")$("feedModal").classList.remove("open")});
+$("fmSave").onclick=()=>{const mode=document.querySelector('input[name=fm]:checked')?.value||"github_archive";F.configure({mode,restUrl:$("fmRest").value.trim(),wsUrl:$("fmWs").value.trim(),pollSec:Math.max(5,+$("fmPoll").value||60),autoRefresh:$("fmAuto").checked});
+ try{localStorage.setItem("horsey_live_toast",JSON.stringify({dismissSec:Math.max(5,+(($("fmToastSec")&&$("fmToastSec").value)||14)),browserNote:!!($("fmBrowserNote")&&$("fmBrowserNote").checked)}));if(window.LiveHub)LiveHub.loadPrefs()}catch(e){}
+ $("feedModal").classList.remove("open")};
+$("fmReset").onclick=()=>{F.reset();try{localStorage.removeItem("horsey_live_toast")}catch(e){}openFm()};
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){$("feedModal").classList.remove("open");const bp=$("bellPop");if(bp)bp.classList.remove("open")}});
+if($("fmTestBanner"))$("fmTestBanner").onclick=()=>{if(window.LiveHub)LiveHub.testBanner();$("feedModal").classList.remove("open")};
 /* ---------- boot ---------- */
 (async function boot(){fixSticky();buildButtons();
  const idx=await F.loadIndex();fillIndex(idx);F._setIndexTop(idx.snapshots[0]?.id);
@@ -497,10 +552,10 @@ addEventListener("hashchange",()=>{const t=location.hash.slice(1);if(["briefings
 // ---------- Tab 6: Agent Pod & Blotter (mirrors scripts/pod_engine.py) ----------
 let POD=null;
 
-async function loadPod(){if(POD)return;POD={};
- const g=async u=>{try{const r=await fetch(u,{cache:"no-cache"});if(!r.ok)return null;return u.endsWith(".jsonl")?(await r.text()).split("\n").filter(Boolean).map(l=>{try{return JSON.parse(l)}catch(e){return null}}).filter(Boolean):await r.json()}catch(e){return null}};
+async function loadPod(force){if(POD&&!force)return POD;if(!POD)POD={};
+ const g=async u=>{try{const r=await fetch(cacheBust(u),{cache:"no-store"});if(!r.ok)return null;return u.endsWith(".jsonl")?(await r.text()).split("\n").filter(Boolean).map(l=>{try{return JSON.parse(l)}catch(e){return null}}).filter(Boolean):await r.json()}catch(e){return null}};
  [POD.roster,POD.score,POD.state,POD.blot]=await Promise.all([g("pod/roster.json"),g("pod/scorecard.json"),g("pod/signals/latest_pod_state.json"),g("pod/ledger/paper_blotter.jsonl")]);
- renderPod()}
+ renderPod();return POD}
 function renderPod(){const R=POD.roster||{},S=POD.state||{},SC=POD.score||{},A=(R.agents||[]),by=id=>A.find(a=>a.id===id)||{};
  const nd=(t,s)=>`<div class="nd">${t}<small>${s}</small></div>`,ar=x=>`<span class="ar">${x}</span>`;
  const sp=A.filter(a=>a.role==="specialist");
@@ -547,13 +602,20 @@ function calcTicket(){const v=id=>{const x=$(id).value;return x===""?null:+x};co
 // ---------- Tab 1: Briefings & Team Memos (reads pod/memos_index.json) ----------
 const BR={idx:null,role:"cio",run:null,raw:false,txt:"",cache:{}};
 const BR_ROLES=[["cio","CIO Executive Briefing","🛡️"],["ptj","PTJ Macro & Regime","🌐"],["intraday","Intraday Tape & Gamma","⚡"],["buffett","Buffett Value","🏛️"],["gamma_data","SPY Gamma Data (.md)","📡"]];
-async function loadBriefings(){if(BR.idx)return;BR.idx={memos:[]};
- try{const r=await fetch("pod/memos_index.json",{cache:"no-cache"});if(r.ok)BR.idx=await r.json()}catch(e){}
- try{const r=await fetch("pod/signals/latest_pod_state.json",{cache:"no-cache"});if(r.ok)BR.state=await r.json()}catch(e){}
- const runs=BR.idx.by_run||[];BR.run=runs[0]?.run_id||null;
- $("brRun").innerHTML=runs.map(r=>`<option value="${esc(r.run_id)}">${esc(r.display_ct)} (${Object.keys(r.memos).length} memos)</option>`).join("")||"<option>No memos yet</option>";
+async function loadBriefings(force){const keepRole=BR.role||"cio",keepRun=BR.run;
+ if(BR.idx&&!force)return BR.idx;
+ try{BR.idx=await getJSON("pod/memos_index.json")}catch(e){if(!BR.idx)BR.idx={memos:[]}}
+ try{BR.state=await getJSON("pod/signals/latest_pod_state.json")}catch(e){}
+ const runs=BR.idx.by_run||[];
+ const latestRun=runs[0]?.run_id||null;
+ if(!keepRun||!runs.some(r=>r.run_id===keepRun))BR.run=latestRun;else BR.run=keepRun;
+ $("brRun").innerHTML=runs.map(r=>`<option value="${esc(r.run_id)}"${r.run_id===BR.run?" selected":""}>${esc(r.display_ct)} (${Object.keys(r.memos||{}).length} memos)</option>`).join("")||"<option>No memos yet</option>";
  $("brIdxNote").textContent=BR.idx.generated_ct?`${BR.idx.count} memos indexed · updated ${BR.idx.generated_ct.replace("T"," ").slice(0,16)} CT`:"";
- drawBrPills();drawBrStrip();openMemo("cio")}
+ drawBrPills();drawBrStrip();
+ const role=keepRole||"cio";
+ if(force&&BR.run===latestRun){const m=brMemo(role);if(m&&m.path)delete BR.cache[m.path]}
+ await openMemo(role);
+ return BR.idx}
 function brMemo(role,run){const ms=BR.idx.memos||[];return ms.find(m=>m.role===role&&m.run_id===(run??BR.run))||ms.find(m=>m.role===role)}
 function drawBrPills(){const c=r=>(BR.idx.memos||[]).filter(m=>m.role===r).length;
  $("brPills").innerHTML=BR_ROLES.map(([r,l,i])=>`<button data-role="${r}" class="${r===BR.role?"on":""}"><span>${i} ${l}</span><span class="ct">${c(r)}</span></button>`).join("")}
@@ -565,7 +627,7 @@ async function openMemo(role){BR.role=role;drawBrPills();const m=brMemo(role);
  if(!m){$("brTitle").textContent="No memo yet for this desk";$("brMeta").textContent="";$("brBody").innerHTML='<div class="note">Nothing filed for this run yet.</div>';return}
  $("brTitle").textContent=m.title;$("brMeta").innerHTML=`${esc(m.agent_name)} · ${esc(m.display_ct)} · <a href="${esc(m.path)}" target="_blank" rel="noopener">${esc(m.path)}</a>`;
  $("brBody").textContent="Loading…";
- try{if(!BR.cache[m.path]){const r=await fetch(m.path,{cache:"no-cache"});if(!r.ok)throw new Error("HTTP "+r.status);BR.cache[m.path]=await r.text()}BR.txt=BR.cache[m.path];drawBrBody()}
+ try{if(!BR.cache[m.path]){const r=await fetch(cacheBust(m.path),{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);BR.cache[m.path]=await r.text()}BR.txt=BR.cache[m.path];drawBrBody()}
  catch(e){$("brBody").innerHTML=`<div class="note">Could not load ${esc(m.path)} (${esc(e.message)})</div>`}}
 function drawBrBody(){const b=$("brBody");if(BR.raw||typeof marked==="undefined")b.innerHTML="<pre>"+esc(BR.txt)+"</pre>";
  else{b.innerHTML=marked.parse(BR.txt);b.querySelectorAll("a").forEach(a=>{a.target="_blank";a.rel="noopener"})}
@@ -580,18 +642,24 @@ loadBriefings();
 
 // ---------- CEO Decisions & Questions slot ----------
 const CQ={q:null,d:null,resp:{},note:"",LS:"horsey_ceo_decisions",PAT:"horsey_gh_pat",REPO:"brahaymin/horsey",CIO:"7ad52fe7-3d09-4438-bfa9-552a13aef8b6"};
-async function loadCeoQ(){const g=async u=>{try{const r=await fetch(u,{cache:"no-cache"});return r.ok?await r.json():null}catch(e){return null}};
+async function loadCeoQ(force){const g=async u=>{try{const r=await fetch(cacheBust(u),{cache:"no-store"});return r.ok?await r.json():null}catch(e){return null}};
+ const prevId=CQ.q?.prompt_set_id,prevStatus=CQ.q?.status,unsaved=$("ceoMsg")&&/Unsaved/.test($("ceoMsg").textContent||"");
+ const keepResp=unsaved?JSON.parse(JSON.stringify(CQ.resp||{})):null;
+ const keepNote=unsaved?($("ceoNote")?.value||CQ.note||""):null;
  [CQ.q,CQ.d]=await Promise.all([g("pod/ceo_questions.json"),g("pod/ceo_decisions/latest_decisions.json")]);
- if(!CQ.q){$("ceoQ").style.display="none";return}
+ if(!CQ.q){$("ceoQ").style.display="none";return null}
+ $("ceoQ").style.display="";
  let local=null;try{local=JSON.parse(localStorage.getItem(CQ.LS)||"null")}catch(e){}
  const same=x=>x&&x.prompt_set_id===CQ.q.prompt_set_id;
  const remote=same(CQ.d)&&CQ.d.responses&&Object.keys(CQ.d.responses).length?CQ.d:null;
  const src=[remote,same(local)?local:null].filter(Boolean).sort((a,b)=>String(b.submitted_ct||b.saved_ct||"").localeCompare(String(a.submitted_ct||a.saved_ct||"")))[0];
- CQ.resp={};CQ.q.questions.forEach(q=>{const v=src?.responses?.[q.id];CQ.resp[q.id]=v!==undefined?v:(Array.isArray(q.default)?[...q.default]:q.default)});
- CQ.note=src?.ceo_note||"";$("ceoNote").value=CQ.note;CQ.answered=!!src;
+ if(keepResp&&prevId===CQ.q.prompt_set_id){CQ.resp=keepResp;CQ.note=keepNote||"";if($("ceoNote"))$("ceoNote").value=CQ.note;CQ.answered=!!src}
+ else{CQ.resp={};CQ.q.questions.forEach(q=>{const v=src?.responses?.[q.id];CQ.resp[q.id]=v!==undefined?v:(Array.isArray(q.default)?[...q.default]:q.default)});
+  CQ.note=src?.ceo_note||"";$("ceoNote").value=CQ.note;CQ.answered=!!src}
  $("ceoQMeta").innerHTML=`Set <code>${esc(CQ.q.prompt_set_id)}</code> · for session ${esc(CQ.q.session_target)} · from <a href="#" id="ceoBrLink">CIO briefing</a>`+(src?` · last answer ${esc((src.submitted_ct||src.saved_ct||"").replace("T"," ").slice(0,16))} CT (${remote===src?"pod repo":"this browser"})`:"");
- $("ceoBrLink").onclick=e=>{e.preventDefault();openMemo("cio")};
- drawCeoQ();updCeoBadge();syncRisk()}
+ const brLink=$("ceoBrLink");if(brLink)brLink.onclick=e=>{e.preventDefault();openMemo("cio")};
+ drawCeoQ();updCeoBadge();syncRisk();
+ return {changed:prevId!==CQ.q.prompt_set_id||prevStatus!==CQ.q.status,prompt_set_id:CQ.q.prompt_set_id,status:CQ.q.status}}
 function drawCeoQ(){$("ceoQList").innerHTML=CQ.q.questions.map(q=>{const v=CQ.resp[q.id],sel=o=>Array.isArray(v)?v.includes(o.value):v===o.value;
  return `<div class="qq" data-q="${esc(q.id)}"><div class="qt">${esc(q.title)}</div><div class="qd">${esc(q.detail||"")}</div>${q.type==="text"?`<textarea data-text="${esc(q.id)}">${esc(v||"")}</textarea>`:
  `<div class="opts" role="${q.type==="multi"?"group":"radiogroup"}">${q.options.map(o=>`<button type="button" data-v="${esc(o.value)}" class="${sel(o)?"on":""}" aria-pressed="${sel(o)}">${esc(o.label)}</button>`).join("")}</div>`}</div>`}).join("")}
@@ -630,5 +698,263 @@ const togSync=()=>{const b=$("ceoSync");b.style.display=b.style.display==="none"
 $("ceoSyncBtn").onclick=togSync;$("ceoConnect").onclick=()=>{$("ceoSync").style.display="none";togSync();$("ceoPat").focus()};
 $("ceoPatSave").onclick=()=>{const v=$("ceoPat").value.trim();if(!v)return;localStorage.setItem(CQ.PAT,v);$("ceoPat").value="";$("ceoPatMsg").textContent="Token saved in this browser ✓ — next Save pushes directly."};
 $("ceoPatClear").onclick=()=>{localStorage.removeItem(CQ.PAT);$("ceoPatMsg").textContent="Token removed."};
+
 loadCeoQ();
+
+// ---------- LiveHub: unified multi-channel refresh + toast banners ----------
+const LiveHub = (()=>{
+  const LS_TOAST="horsey_live_toast", LS_HIST="horsey_live_hist";
+  let prefs={dismissSec:14, browserNote:false};
+  let fp={snapId:null, memosKey:null, podStateKey:null, ceoQKey:null, blotterKey:null, decisionsKey:null};
+  let booted=false, history=[], paused=false;
+  const host=()=>$("liveToastHost");
+
+  function loadPrefs(){try{Object.assign(prefs, JSON.parse(localStorage.getItem(LS_TOAST)||"{}"))}catch(e){}
+    try{history=JSON.parse(localStorage.getItem(LS_HIST)||"[]");if(!Array.isArray(history))history=[]}catch(e){history=[]}
+    renderBell()}
+  function saveHist(){try{localStorage.setItem(LS_HIST,JSON.stringify(history.slice(0,5)))}catch(e){} renderBell()}
+  function ctStamp(d){return (d||new Date()).toLocaleString("en-US",{timeZone:"America/Chicago",month:"short",day:"numeric",hour:"numeric",minute:"2-digit",second:"2-digit"})+" CT"}
+  function fmtB(v){if(v==null||isNaN(v))return "—";const a=Math.abs(v);const s=v<0?"-":"";return a>=1e9?s+"$"+(a/1e9).toFixed(2)+"B":a>=1e6?s+"$"+(a/1e6).toFixed(1)+"M":s+"$"+a.toFixed(0)}
+  function fmtPct(v){if(v==null||isNaN(v))return "—";return (v>0?"+":"")+Number(v).toFixed(2)+"%"}
+
+  function renderBell(){
+    const btn=$("bellBtn"), cnt=$("bellCnt"), list=$("bellList"), pill=$("lastUpPill");
+    if(!btn)return;
+    const n=history.length; btn.classList.toggle("has", n>0); if(cnt)cnt.textContent=String(n);
+    if(pill){if(n){pill.classList.add("show");pill.innerHTML="🔔 Last update <b>"+esc((history[0].title||"").slice(0,28))+"</b>"}else pill.classList.remove("show")}
+    if(!list)return;
+    if(!n){list.className="empty";list.textContent="No updates yet — alerts appear when new snapshots, briefings, or tickets land.";return}
+    list.className="";
+    list.innerHTML=history.map((h,i)=>`<div class="bi" data-i="${i}"><div class="t">${esc(h.badge||"UPDATE")} · ${esc(h.title)}</div><div class="s">${esc(h.summary||"")}<br>${esc(h.when||"")}</div></div>`).join("");
+  }
+
+  function pushHist(item){
+    history.unshift({id:item.id||("h"+Date.now()), badge:item.badge, title:item.title, summary:item.summary, when:item.when||ctStamp(), kind:item.kind, action:item.action||null, actionLabel:item.actionLabel||null});
+    history=history.slice(0,5); saveHist();
+  }
+
+  function maybeBrowserNotify(item){
+    if(!prefs.browserNote||typeof Notification==="undefined")return;
+    const go=()=>{try{new Notification(item.title,{body:item.summary||"", tag:item.id||"horsey-live"})}catch(e){}};
+    if(Notification.permission==="granted")go();
+    else if(Notification.permission!=="denied")Notification.requestPermission().then(p=>{if(p==="granted")go()});
+  }
+
+  function showBanner(item){
+    if(!booted && !item.force){ pushHist(item); return; } // baseline path shouldn't toast, but test/force can
+    const el=document.createElement("div");
+    el.className="live-banner kind-"+(item.kind||"market");
+    el.setAttribute("role","status");
+    const aid="lb"+Date.now()+Math.floor(Math.random()*999);
+    el.dataset.id=aid;
+    const sec=Math.max(5, +prefs.dismissSec||14);
+    el.innerHTML=`<div class="lb-top"><div class="lb-ico">${item.icon||"📡"}</div><div class="lb-body">
+      <div class="lb-badge"><span class="pulse"></span>${esc(item.badge||"UPDATE")}</div>
+      <div class="lb-title">${esc(item.title||"Update")}</div>
+      <div class="lb-sum">${esc(item.summary||"")}</div>
+      <div class="lb-time">${esc(item.when||ctStamp())}</div>
+      <div class="lb-actions">
+        ${item.actionLabel?`<button type="button" class="primary" data-act="1">${esc(item.actionLabel)}</button>`:""}
+        <button type="button" data-dismiss="1">Dismiss ✕</button>
+      </div></div>
+      <button type="button" class="lb-x" data-dismiss="1" aria-label="Dismiss">✕</button></div>
+      <div class="lb-bar"><i style="animation:lbShrink ${sec}s linear forwards"></i></div>`;
+    // inject keyframes once
+    if(!document.getElementById("lbShrinkStyle")){
+      const st=document.createElement("style"); st.id="lbShrinkStyle";
+      st.textContent="@keyframes lbShrink{from{transform:scaleX(1)}to{transform:scaleX(0)}}";
+      document.head.appendChild(st);
+    }
+    const h=host(); if(!h)return;
+    h.appendChild(el);
+    pushHist(item); maybeBrowserNotify(item);
+
+    let remaining=sec*1000, started=Date.now(), timer=null, pausedLocal=false;
+    const clear=()=>{if(timer)clearTimeout(timer); timer=null; if(el.parentNode)el.remove()};
+    const arm=()=>{timer=setTimeout(clear, remaining)};
+    const pause=()=>{if(pausedLocal)return; pausedLocal=true; remaining-=Date.now()-started; if(timer)clearTimeout(timer); const bar=el.querySelector(".lb-bar>i"); if(bar)bar.style.animationPlayState="paused"};
+    const resume=()=>{if(!pausedLocal)return; pausedLocal=false; started=Date.now(); const bar=el.querySelector(".lb-bar>i"); if(bar)bar.style.animationPlayState="running"; arm()};
+    el.addEventListener("mouseenter", pause); el.addEventListener("mouseleave", resume);
+    el.addEventListener("touchstart", pause, {passive:true}); el.addEventListener("touchend", resume, {passive:true});
+    el.addEventListener("click", e=>{
+      if(e.target.closest("[data-dismiss]")){clear(); return}
+      if(e.target.closest("[data-act]") && typeof item.action==="function"){ try{item.action()}catch(err){console.error(err)} clear(); }
+    });
+    arm();
+    // keep only 3 visible
+    while(h.children.length>3)h.removeChild(h.firstChild);
+  }
+
+  function reopen(i){
+    const h=history[i]; if(!h)return;
+    showBanner({force:true, kind:h.kind||"market", icon:h.kind==="cio"?"🛡️":h.kind==="pod"?"⚡":h.kind==="ceo"?"📋":"📡",
+      badge:h.badge, title:h.title, summary:h.summary, when:h.when,
+      actionLabel:h.actionLabel, action:()=>{
+        if(h.kind==="cio"||h.kind==="ceo"){showTab("briefings");window.history.replaceState(null,"","#briefings");$("tabs").scrollIntoView({behavior:"smooth"});if(h.kind==="cio")openMemo("cio")}
+        else if(h.kind==="pod"){showTab("pod");window.history.replaceState(null,"","#pod");$("tabs").scrollIntoView({behavior:"smooth"})}
+        else {showTab("gamma");window.history.replaceState(null,"","#gamma")}
+      }});
+  }
+
+  function testBanner(){
+    showBanner({force:true, kind:"test", icon:"🔔", badge:"TEST ALERT", title:"Banner preview — phone & desktop",
+      summary:"SPY $733.00 (−4.41%) · VIX 28.18 · 0DTE GEX −$2.66B · Post-Close sample. Auto-dismiss pauses on hover/touch.",
+      actionLabel:"View Gamma", action:()=>{showTab("gamma");window.history.replaceState(null,"","#gamma");$("tabs").scrollIntoView({behavior:"smooth"})}});
+  }
+
+  function snapKey(meta){return meta&&meta.id?String(meta.id):null}
+  function memosFingerprint(idx){
+    if(!idx)return null;
+    const top=(idx.by_run&&idx.by_run[0]&&idx.by_run[0].run_id)||"";
+    return [idx.generated_ct||"", idx.count||0, top].join("|");
+  }
+  function podFingerprint(st){return st?(st.updated_ct||st.as_of_ct||"")+"|"+((st.cio_synthesis&&st.cio_synthesis.summary)||"").slice(0,80):null}
+  function blotFingerprint(rows){
+    if(!rows)return null;
+    const last=rows[rows.length-1]||{};
+    return rows.length+"|"+(last.ticket_id||"")+"|"+(last.verdict||"")+"|"+(last.created_ct||"");
+  }
+  function ceoFingerprint(q,d){
+    return [(q&&q.prompt_set_id)||"", (q&&q.status)||"", (d&&d.status)||"", (d&&d.submitted_ct)||""].join("|");
+  }
+
+  function deltaSummary(cur, prev){
+    if(!cur)return "New market snapshot available.";
+    const parts=[];
+    const spy=cur.spy_price, prevSpy=prev&&prev.spy_price;
+    const chg=cur.spy_1d_pct;
+    parts.push(`SPY $${spy!=null?Number(spy).toFixed(2):"—"}${chg!=null?" ("+fmtPct(chg)+")":""}`);
+    if(prevSpy!=null&&spy!=null){const d=spy-prevSpy; parts.push(`Δspot ${d>=0?"+":""}${d.toFixed(2)}`);}
+    if(cur.vix!=null){let s=`VIX ${Number(cur.vix).toFixed(2)}`; if(prev&&prev.vix!=null){const d=cur.vix-prev.vix;s+=` (${d>=0?"+":""}${d.toFixed(2)})`} parts.push(s)}
+    if(cur.net_gex_45d!=null){let s=`45D GEX ${fmtB(cur.net_gex_45d)}`; if(prev&&prev.net_gex_45d!=null){const d=cur.net_gex_45d-prev.net_gex_45d;s+=` (${d>=0?"+":""}${fmtB(d)})`} parts.push(s)}
+    // wall / 200-SMA crosses using index fields when present
+    const walls=[];
+    const px=spy, sma=null; // index may not have sma; check loaded S
+    try{const sum=(S&&S.summary)||{}; const sma200=sum.spy_sma_200; const pw=sum.put_wall_0dte||735; const cw=sum.call_wall_0dte||760;
+      if(prevSpy!=null&&px!=null&&sma200!=null){if(prevSpy>=sma200&&px<sma200)walls.push("broke below 200-SMA"); if(prevSpy<sma200&&px>=sma200)walls.push("reclaimed 200-SMA")}
+      if(prevSpy!=null&&px!=null){if(prevSpy>=pw&&px<pw)walls.push("broke $"+pw+" Put Wall"); if(prevSpy<pw&&px>=pw)walls.push("reclaimed $"+pw+" Put Wall");
+        if(prevSpy<=cw&&px>cw)walls.push("broke above $"+cw+" Call Wall")}
+    }catch(e){}
+    if(cur.run_tag)parts.push(String(cur.run_tag).replace(/_/g," "));
+    if(walls.length)parts.push("⚠ "+walls.join(", "));
+    return parts.join(" · ");
+  }
+
+  function onNewSnapshot(meta, prevMeta, autoLoaded){
+    if(!booted)return;
+    const title=autoLoaded?"New SPY / GEX Snapshot Loaded":"New SPY / GEX Snapshot Available";
+    const summary=deltaSummary(meta, prevMeta);
+    showBanner({kind:"market", icon:"📡", badge:"MARKET UPDATE", title, summary,
+      actionLabel:autoLoaded?"View Gamma":"Load Latest",
+      action:()=>{
+        if(!autoLoaded){load(0)}
+        showTab("gamma"); window.history.replaceState(null,"","#gamma"); $("tabs").scrollIntoView({behavior:"smooth"});
+      }});
+    if(meta&&meta.id)fp.snapId=meta.id;
+  }
+
+  async function checkMemos(){
+    let idx=null;
+    try{idx=await getJSON("pod/memos_index.json")}catch(e){return}
+    const key=memosFingerprint(idx);
+    if(fp.memosKey==null){fp.memosKey=key;return}
+    if(key===fp.memosKey)return;
+    const prev=fp.memosKey; fp.memosKey=key;
+    if(!booted)return;
+    const top=(idx.by_run&&idx.by_run[0])||{};
+    const cio=(idx.memos||[]).find(m=>m.role==="cio"&&m.run_id===top.run_id)||(idx.memos||[]).find(m=>m.role==="cio");
+    const isCio=!!cio && String(prev).split("|")[0]!==(idx.generated_ct||"");
+    await loadBriefings(true);
+    showBanner({kind:"cio", icon:"🛡️", badge:cio?"CIO BRIEFING":"POD MEMOS",
+      title:cio?("New CIO Briefing"+(cio.title?": "+cio.title.slice(0,60):"")):"New Pod Memos Filed",
+      summary:`${idx.count||0} memos · run ${top.display_ct||top.run_id||"—"}${idx.generated_ct?" · indexed "+String(idx.generated_ct).replace("T"," ").slice(0,16)+" CT":""}`,
+      actionLabel:"Read Briefing →",
+      action:()=>{showTab("briefings");window.history.replaceState(null,"","#briefings");$("tabs").scrollIntoView({behavior:"smooth"});openMemo("cio")}});
+  }
+
+  async function checkPodAndCeo(){
+    let state=null, blot=null, q=null, d=null;
+    try{[state, blot, q, d]=await Promise.all([
+      getJSON("pod/signals/latest_pod_state.json").catch(()=>null),
+      getTextCB("pod/ledger/paper_blotter.jsonl").then(t=>t.trim().split("\n").filter(Boolean).map(l=>{try{return JSON.parse(l)}catch(e){return null}}).filter(Boolean)).catch(()=>null),
+      getJSON("pod/ceo_questions.json").catch(()=>null),
+      getJSON("pod/ceo_decisions/latest_decisions.json").catch(()=>null)
+    ])}catch(e){return}
+
+    const pk=podFingerprint(state), bk=blotFingerprint(blot), ck=ceoFingerprint(q,d);
+    const first=fp.podStateKey==null;
+    const podChanged=!first && pk && pk!==fp.podStateKey;
+    const blotChanged=!first && bk && bk!==fp.blotterKey;
+    const ceoChanged=!first && ck && ck!==fp.ceoQKey;
+    if(pk)fp.podStateKey=pk; if(bk)fp.blotterKey=bk; if(ck)fp.ceoQKey=ck;
+    if(first||!booted)return;
+
+    if(podChanged||blotChanged){
+      await loadPod(true);
+      const last=(blot&&blot[blot.length-1])||{};
+      const staged=blotChanged && last && (last.status==="conditional_preapproved"||last.staged||last.verdict==="APPROVED_FOR_STAGING");
+      showBanner({kind:"pod", icon:"⚡", badge:staged?"TICKET / POD ALERT":"POD STATE",
+        title:staged?`Ticket ${last.ticket_id||"staged"}`:"Pod state updated",
+        summary:staged?`${last.symbol||""} ${last.direction||""} × ${last.quantity??"—"} · ${last.tag||last.setup_id||""} · ${last.verdict||last.status||""}`:((state&&state.cio_synthesis&&state.cio_synthesis.summary)||"latest_pod_state.json changed").slice(0,160),
+        actionLabel:"View Blotter →",
+        action:()=>{showTab("pod");window.history.replaceState(null,"","#pod");$("tabs").scrollIntoView({behavior:"smooth"})}});
+    }
+    if(ceoChanged){
+      await loadCeoQ(true);
+      const open=q && q.status!=="answered" && q.status!=="submitted";
+      showBanner({kind:"ceo", icon:"📋", badge:open?"CEO QUESTIONS":"CEO DECISIONS",
+        title:open?`New CEO question set: ${q.prompt_set_id||""}`:`CEO decisions updated: ${q&&q.prompt_set_id||""}`,
+        summary:open?`${(q.questions||[]).length} open · session ${q.session_target||"—"}`:`status ${q&&q.status||"—"} / decisions ${d&&d.status||"—"}`,
+        actionLabel:open?"Review Decisions →":"Open Briefings →",
+        action:()=>{showTab("briefings");window.history.replaceState(null,"","#briefings");$("tabs").scrollIntoView({behavior:"smooth"});const el=$("ceoQ");if(el)el.scrollIntoView({behavior:"smooth",block:"nearest"})}});
+    }
+  }
+
+  async function refreshChannels(reason){
+    try{await Promise.all([checkMemos(), checkPodAndCeo()])}catch(e){console.warn("[LiveHub]", e)}
+  }
+
+  async function baseline(){
+    // Capture fingerprints WITHOUT toasting
+    try{
+      const idx=IDX||await getJSON("snapshots/index.json").catch(()=>null);
+      fp.snapId=idx&&idx.snapshots&&idx.snapshots[0]&&idx.snapshots[0].id||null;
+    }catch(e){}
+    try{const mi=BR.idx||await getJSON("pod/memos_index.json"); fp.memosKey=memosFingerprint(mi)}catch(e){}
+    try{
+      const st=POD&&POD.state||await getJSON("pod/signals/latest_pod_state.json").catch(()=>null);
+      fp.podStateKey=podFingerprint(st);
+      let blot=POD&&POD.blot;
+      if(!blot){try{const t=await getTextCB("pod/ledger/paper_blotter.jsonl");blot=t.trim().split("\n").filter(Boolean).map(l=>{try{return JSON.parse(l)}catch(e){return null}}).filter(Boolean)}catch(e){blot=[]}}
+      fp.blotterKey=blotFingerprint(blot);
+    }catch(e){}
+    try{fp.ceoQKey=ceoFingerprint(CQ.q, CQ.d)}catch(e){}
+    booted=true;
+  }
+
+  function bindUI(){
+    const btn=$("bellBtn"), pop=$("bellPop");
+    if(btn&&pop){
+      btn.onclick=e=>{e.stopPropagation();pop.classList.toggle("open")};
+      document.addEventListener("click",e=>{if(!pop.contains(e.target)&&e.target!==btn)pop.classList.remove("open")});
+    }
+    if($("bellList"))$("bellList").onclick=e=>{const bi=e.target.closest(".bi");if(bi)reopen(+bi.dataset.i)};
+    if($("bellTest"))$("bellTest").onclick=()=>{testBanner(); if(pop)pop.classList.remove("open")};
+    if($("bellClear"))$("bellClear").onclick=()=>{history=[];saveHist()};
+    if($("lastUpPill"))$("lastUpPill").onclick=()=>reopen(0);
+  }
+
+  function start(){
+    loadPrefs(); bindUI();
+    const F=window.SPYGammaFeed;
+    if(F&&F.onPoll)F.onPoll((info)=>{refreshChannels(info&&info.reason||"poll")});
+    // Safety net: if autoRefresh off, still catch wake via feed-adapter pollNow; also light local timer for channels when auto on
+    // Baseline after initial page data settles
+    setTimeout(()=>{baseline()}, 800);
+  }
+
+  return {start, loadPrefs, testBanner, onNewSnapshot, showBanner, refreshChannels, baseline, get fp(){return fp}, get booted(){return booted}};
+})();
+window.LiveHub=LiveHub;
+LiveHub.start();
 </script></body></html>
