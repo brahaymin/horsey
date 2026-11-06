@@ -282,6 +282,13 @@ def write_index(ts_ct):
 
 
 def main():
+    # Pull CEO decisions committed from the web app before writing anything (avoids push conflicts)
+    try:
+        if subprocess.run(["gh", "auth", "status"], capture_output=True, text=True).returncode == 0:
+            r = subprocess.run(["git", "pull", "--rebase", "--autostash", "origin", "main"], cwd=REPO_DIR, capture_output=True, text=True, timeout=120)
+            print("git pull:", (r.stdout or r.stderr).strip()[:200])
+    except Exception as e:
+        print("git pull skipped:", e)
     ensure_repo()
 
     # Clean legacy unfinished June 2026 gamma files if still present (leaving wash_sale_tracker untouched)

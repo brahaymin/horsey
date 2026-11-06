@@ -91,6 +91,15 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
 .reader .md hr{border:0;border-top:1px solid var(--line);margin:16px 0}.reader .md blockquote{background:var(--panel2);margin:8px 0;padding:6px 12px;border-left:3px solid #f59e0b}
 .rdhead{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:8px;border-bottom:1px solid var(--line);padding-bottom:8px}
 </style>
+<style>
+.ceoq{border:1px solid #f59e0b;box-shadow:0 0 0 1px rgba(245,158,11,.15);margin-bottom:12px}
+.ceoq h2{margin:0;font-size:17px}.qq{margin:12px 0;padding:10px 0;border-top:1px solid var(--line)}.qq .qt{font-weight:800}.qq .qd{color:var(--mut);font-size:12.5px;margin:2px 0 8px}
+.opts{display:flex;flex-wrap:wrap;gap:6px}.opts button{border-radius:999px;font-size:12.5px;text-align:left;white-space:normal}.opts button.on{background:#0b2a22;border-color:#10b981;color:#d1fae5}
+.opts button.on::before{content:"✓ "}.ceoq textarea{width:100%;box-sizing:border-box;min-height:70px;background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}
+.qbadge{background:#f59e0b;color:#111;border-radius:999px;padding:0 7px;font-size:11px;font-weight:800;margin-left:4px}
+.qok{color:var(--pos);font-weight:700}.qwarn{color:var(--warn);font-weight:700}.syncbox{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:8px}
+.syncbox input{width:100%;box-sizing:border-box}.syncbox ul{margin:6px 0 8px 18px;padding:0;font-size:12.5px}
+</style>
 </head><body>
 <div class="topbar"><div class="wrap">
  <div class="brand">SPY Gamma Structure &amp; Regime Monitor<small id="asof">Loading…</small></div>
@@ -133,6 +142,21 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
 
 <section class="panel show" id="p-briefings"><div class="phead">1 · Briefings &amp; Team Memos</div>
  <div class="strip" id="brStrip"></div>
+ <div class="card ceoq" id="ceoQ">
+  <div class="row" style="justify-content:space-between"><h2>🗳️ CEO Decisions &amp; Standing Directives <span id="ceoQStatus" class="pill"></span></h2><button id="ceoSyncBtn">⚙️ Sync Setup</button></div>
+  <div class="note" id="ceoQMeta" style="margin:4px 0 0"></div>
+  <div id="ceoQList"></div>
+  <label for="ceoNote" class="note" style="text-transform:uppercase;display:block;margin:4px 0">Ask the CIO / Add Standing CEO Note or Override…</label>
+  <textarea id="ceoNote" placeholder="e.g. Approve A only if NQ confirms. Question: what invalidates Scenario C?"></textarea>
+  <div class="row" style="margin-top:8px;gap:8px"><button id="ceoSave" class="ceob">💾 Save &amp; Push to Pod</button><span id="ceoMsg" class="note" style="margin:0"></span></div>
+  <div id="ceoAlt" class="row" style="gap:8px;margin-top:8px;display:none"><button id="ceoCopy">📋 Copy &amp; Open CIO in Grok Bot</button><button id="ceoConnect">🔗 Connect 1-Click Direct Sync (Free GitHub Token)</button></div>
+  <div id="ceoSync" class="syncbox" style="display:none"><b>1-Click Direct Sync (optional)</b>
+   <ul><li>GitHub → Settings → Developer settings → <b>Fine-grained tokens</b> → Generate new token.</li>
+   <li>Repository access: <b>Only select repositories → brahaymin/horsey</b>. Permissions: <b>Contents: Read and write</b> (nothing else).</li>
+   <li>Paste it below. It is stored <b>only in this browser's localStorage</b> — never in the repo. Repeat once per device.</li></ul>
+   <input type="password" id="ceoPat" placeholder="github_pat_…" autocomplete="off"><div class="row" style="gap:8px;margin-top:6px"><button id="ceoPatSave">Save token</button><button id="ceoPatClear">Remove token</button><span id="ceoPatMsg" class="note" style="margin:0"></span></div></div>
+ </div>
+
  <div class="brw">
   <div class="card brside">
    <div class="note" style="margin:0 0 6px;text-transform:uppercase">Author / Desk</div>
@@ -510,7 +534,7 @@ function calcTicket(){const v=id=>{const x=$(id).value;return x===""?null:+x};co
  const r=inv?Math.abs(en-stp):null,t1=v("cT1")??(r?en+sg*3*r:null),t2=v("cT2")??(r?en+sg*5*r:null);
  const best=r?Math.max(...[t1,t2].filter(x=>x!=null).map(t=>sg*(t-en)/r)):null;chk.push([best!=null&&best>=minRR-1e-9,`Asymmetry ≥ ${minRR}R`,best!=null?n(best,2)+"R":""]);
  let eff=Math.min(req,1);chk.push([req<=1,"Risk % ≤ 1.0% cap",`requested ${req}% → ${eff}%`]);
- const th=[];if(dd)th.push("drawdown");if(vix!=null&&vix>25)th.push(`VIX ${vix} > 25`);if(th.length)eff/=2;chk.push([true,"Vol-regime / drawdown throttle applied",th.length?"halved: "+th.join(", "):"not required"]);
+ const th=[];if(dd)th.push("drawdown");if(vix!=null&&vix>25)th.push(`VIX ${vix} > 25`);const ceoAdj=window.CEO_CAP!=null&&+$("cRisk").value===window.CEO_CAP;if(th.length&&!ceoAdj)eff/=2;chk.push([true,"Vol-regime / drawdown throttle applied",ceoAdj?`CEO-approved cap ${window.CEO_CAP}% (already vol-adjusted)`:th.length?"halved: "+th.join(", "):"not required"]);
  let lo=m.put_wall_0dte,hi=m.call_wall_0dte,nml=false;if(ref!=null&&lo&&hi){const w=hi-lo;nml=ref>lo+.3*w&&ref<hi-.3*w}chk.push([!nml,"Not mid-range no-man's-land vs 0DTE walls",`SPY ${ref??"—"} vs ${lo}/${hi}`]);
  const tsOk=!!ts||!opt;chk.push([tsOk,"Time stop defined (mandatory for options)",ts||"—"]);
  const bud=eq*eff/100,qty=r?Math.floor(bud/(r*mult)):0,ok=chk.every(c=>c[0])&&qty>=1;
@@ -553,4 +577,58 @@ $("brFmt").onclick=()=>{BR.raw=false;drawBrBody()};$("brRaw").onclick=()=>{BR.ra
 $("brCopy").onclick=async()=>{try{await navigator.clipboard.writeText(BR.txt);$("brCopy").textContent="✓ Copied"}catch(e){BR.raw=true;drawBrBody();$("brCopy").textContent="Select text"}setTimeout(()=>$("brCopy").textContent="📋 Copy",1500)};
 $("qbBrief").onclick=()=>{showTab("briefings");history.replaceState(null,"","#briefings");$("tabs").scrollIntoView({behavior:"smooth"})};
 loadBriefings();
+
+// ---------- CEO Decisions & Questions slot ----------
+const CQ={q:null,d:null,resp:{},note:"",LS:"horsey_ceo_decisions",PAT:"horsey_gh_pat",REPO:"brahaymin/horsey",CIO:"7ad52fe7-3d09-4438-bfa9-552a13aef8b6"};
+async function loadCeoQ(){const g=async u=>{try{const r=await fetch(u,{cache:"no-cache"});return r.ok?await r.json():null}catch(e){return null}};
+ [CQ.q,CQ.d]=await Promise.all([g("pod/ceo_questions.json"),g("pod/ceo_decisions/latest_decisions.json")]);
+ if(!CQ.q){$("ceoQ").style.display="none";return}
+ let local=null;try{local=JSON.parse(localStorage.getItem(CQ.LS)||"null")}catch(e){}
+ const same=x=>x&&x.prompt_set_id===CQ.q.prompt_set_id;
+ const remote=same(CQ.d)&&CQ.d.responses&&Object.keys(CQ.d.responses).length?CQ.d:null;
+ const src=[remote,same(local)?local:null].filter(Boolean).sort((a,b)=>String(b.submitted_ct||b.saved_ct||"").localeCompare(String(a.submitted_ct||a.saved_ct||"")))[0];
+ CQ.resp={};CQ.q.questions.forEach(q=>{const v=src?.responses?.[q.id];CQ.resp[q.id]=v!==undefined?v:(Array.isArray(q.default)?[...q.default]:q.default)});
+ CQ.note=src?.ceo_note||"";$("ceoNote").value=CQ.note;CQ.answered=!!src;
+ $("ceoQMeta").innerHTML=`Set <code>${esc(CQ.q.prompt_set_id)}</code> · for session ${esc(CQ.q.session_target)} · from <a href="#" id="ceoBrLink">CIO briefing</a>`+(src?` · last answer ${esc((src.submitted_ct||src.saved_ct||"").replace("T"," ").slice(0,16))} CT (${remote===src?"pod repo":"this browser"})`:"");
+ $("ceoBrLink").onclick=e=>{e.preventDefault();openMemo("cio")};
+ drawCeoQ();updCeoBadge();syncRisk()}
+function drawCeoQ(){$("ceoQList").innerHTML=CQ.q.questions.map(q=>{const v=CQ.resp[q.id],sel=o=>Array.isArray(v)?v.includes(o.value):v===o.value;
+ return `<div class="qq" data-q="${esc(q.id)}"><div class="qt">${esc(q.title)}</div><div class="qd">${esc(q.detail||"")}</div>${q.type==="text"?`<textarea data-text="${esc(q.id)}">${esc(v||"")}</textarea>`:
+ `<div class="opts" role="${q.type==="multi"?"group":"radiogroup"}">${q.options.map(o=>`<button type="button" data-v="${esc(o.value)}" class="${sel(o)?"on":""}" aria-pressed="${sel(o)}">${esc(o.label)}</button>`).join("")}</div>`}</div>`}).join("")}
+$("ceoQList").addEventListener("click",e=>{const b=e.target.closest("button[data-v]");if(!b)return;const qid=b.closest(".qq").dataset.q,q=CQ.q.questions.find(x=>x.id===qid),v=b.dataset.v;
+ if(q.type==="multi"){const ex=new Set(q.options.filter(o=>o.exclusive||o.value==="veto_all").map(o=>o.value));let cur=Array.isArray(CQ.resp[qid])?[...CQ.resp[qid]]:[];
+  if(cur.includes(v))cur=cur.filter(x=>x!==v);else cur=ex.has(v)?[v]:[...cur.filter(x=>!ex.has(x)),v];CQ.resp[qid]=cur}
+ else CQ.resp[qid]=v;drawCeoQ();syncRisk();$("ceoMsg").innerHTML='<span class="qwarn">Unsaved changes</span>'});
+$("ceoQList").addEventListener("input",e=>{const t=e.target.closest("textarea[data-text]");if(t)CQ.resp[t.dataset.text]=t.value});
+function riskPct(){for(const q of CQ.q?.questions||[]){const o=q.options?.find(o=>o.value===CQ.resp[q.id]&&o.risk_pct!=null);if(o)return o.risk_pct}return null}
+function syncRisk(){const r=riskPct();if(r==null||!$("cRisk"))return;window.CEO_CAP=r;$("cRisk").value=r;if(typeof calcTicket==="function")calcTicket()}
+function updCeoBadge(){const open=CQ.q&&CQ.q.status==="awaiting_ceo"&&!CQ.answered?CQ.q.questions.length:0;
+ $("qbBrief").innerHTML="📋 CEO Briefing"+(open?` · ${open} Open Qs`:"");const tb=$("tabs").querySelector('[data-tab="briefings"]');tb.innerHTML="1. Briefings &amp; Team Memos"+(open?`<span class="qbadge">${open}</span>`:"");
+ $("ceoQStatus").textContent=open?`${open} open — awaiting CEO`:"✓ answered";$("ceoQStatus").style.color=open?"var(--warn)":"var(--pos)"}
+function ctNow(){const d=new Date(),p=Object.fromEntries(new Intl.DateTimeFormat("en-US",{timeZone:"America/Chicago",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23",timeZoneName:"longOffset"}).formatToParts(d).map(x=>[x.type,x.value]));
+ const off=(p.timeZoneName||"GMT-06:00").replace("GMT","").replace(":","")||"-0600";return{iso:`${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}${off}`,stamp:`${p.year}-${p.month}-${p.day}_${p.hour}${p.minute}`}}
+function ceoPayload(){const t=ctNow();return{prompt_set_id:CQ.q.prompt_set_id,status:"submitted",submitted_ct:t.iso,saved_ct:t.iso,session_target:CQ.q.session_target,briefing_ref:CQ.q.briefing_ref,responses:JSON.parse(JSON.stringify(CQ.resp)),risk_pct:riskPct(),ceo_note:$("ceoNote").value.trim(),source:"horsey web app"}}
+function ceoSummary(p){const L=[`CEO DECISIONS — ${p.prompt_set_id} (session ${p.session_target}) · ${p.submitted_ct} CT`];
+ CQ.q.questions.forEach(q=>{const v=p.responses[q.id],vs=Array.isArray(v)?v:[v];L.push(`• ${q.title}: ${vs.map(x=>(q.options||[]).find(o=>o.value===x)?.label||x).join("; ")||"—"}`)});
+ if(p.ceo_note)L.push(`• CEO note: ${p.ceo_note}`);L.push("Please record these in pod/ceo_decisions/latest_decisions.json and apply to Friday's tickets.");return L.join("\n")}
+const b64=str=>btoa(unescape(encodeURIComponent(str)));
+async function ghPut(path,content,msg,pat,isNew){const u=`https://api.github.com/repos/${CQ.REPO}/contents/${path}`,h={Authorization:`Bearer ${pat}`,Accept:"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28"};
+ let sha;if(!isNew){const g=await fetch(u+"?ref=main",{headers:h,cache:"no-store"});if(g.ok)sha=(await g.json()).sha;else if(g.status!==404)throw new Error(`GET ${g.status}`)}
+ const r=await fetch(u,{method:"PUT",headers:{...h,"Content-Type":"application/json"},body:JSON.stringify({message:msg,content:b64(content),branch:"main",...(sha?{sha}:{})})});
+ if(!r.ok)throw new Error(`PUT ${r.status} ${(await r.json().catch(()=>({}))).message||""}`);return(await r.json()).commit?.sha}
+$("ceoSave").onclick=async()=>{const p=ceoPayload();localStorage.setItem(CQ.LS,JSON.stringify(p));CQ.answered=true;CQ.last=p;updCeoBadge();
+ const t=new Date().toLocaleTimeString("en-US",{timeZone:"America/Chicago",hour:"numeric",minute:"2-digit"});$("ceoMsg").innerHTML=`<span class="qok">✓ Saved locally ${t} CT</span>`;
+ const pat=localStorage.getItem(CQ.PAT);if(!pat){$("ceoAlt").style.display="flex";$("ceoMsg").innerHTML+=` · <span class="qwarn">Not yet in pod repo — send to CIO below or connect 1-click sync.</span>`;return}
+ $("ceoMsg").innerHTML+=" · syncing…";try{const js=JSON.stringify(p,null,2)+"\n",st=ctNow().stamp;
+  await ghPut(`pod/ceo_decisions/${st}_ceo_decision.json`,js,`CEO decision ${p.prompt_set_id} ${st} CT`,pat,true);
+  const c=await ghPut("pod/ceo_decisions/latest_decisions.json",js,`CEO decisions (latest) ${p.prompt_set_id}`,pat);
+  $("ceoMsg").innerHTML=`<span class="qok">✓ Saved locally ${t} CT · ✓ Synced to Pod Repo (commit ${String(c||"").slice(0,7)})</span>`;$("ceoAlt").style.display="none"}
+ catch(e){$("ceoAlt").style.display="flex";$("ceoMsg").innerHTML=`<span class="qok">✓ Saved locally ${t} CT</span> · <span class="neg">GitHub sync failed (${esc(e.message)}) — check token or use Copy &amp; Open CIO.</span>`}};
+$("ceoCopy").onclick=async()=>{const p=CQ.last||ceoPayload(),txt=ceoSummary(p);try{await navigator.clipboard.writeText(txt);$("ceoMsg").innerHTML='<span class="qok">✓ Copied — paste into the CIO chat and send.</span>'}catch(e){prompt("Copy this and paste to the CIO:",txt)}
+ location.href=`grokbot://app/v1/agent?id=${CQ.CIO}`};
+const togSync=()=>{const b=$("ceoSync");b.style.display=b.style.display==="none"?"block":"none";$("ceoPatMsg").textContent=localStorage.getItem(CQ.PAT)?"Token saved in this browser ✓":"No token saved";};
+$("ceoSyncBtn").onclick=togSync;$("ceoConnect").onclick=()=>{$("ceoSync").style.display="none";togSync();$("ceoPat").focus()};
+$("ceoPatSave").onclick=()=>{const v=$("ceoPat").value.trim();if(!v)return;localStorage.setItem(CQ.PAT,v);$("ceoPat").value="";$("ceoPatMsg").textContent="Token saved in this browser ✓ — next Save pushes directly."};
+$("ceoPatClear").onclick=()=>{localStorage.removeItem(CQ.PAT);$("ceoPatMsg").textContent="Token removed."};
+loadCeoQ();
 </script></body></html>

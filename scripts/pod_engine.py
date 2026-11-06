@@ -342,7 +342,7 @@ def fmtB(v):
 
 def status():
     m, roster, sc, st = market(), rj(ROSTER, {}) or {}, rj(SCORE, {}) or {}, rj(STATE, {}) or {}
-    L = [f"=== EXECUTIVE CIO BRIEF — {now_ct().strftime('%a %b %d, %Y %I:%M %p')} CT ===", f"({DISCLAIMER})",
+    L = [f"=== EXECUTIVE CIO BRIEF — {now_ct().strftime('%a %b %d, %Y %I:%M %p')} CT ===", f"({DISCLAIMER})", ceo_decisions_block(), "",
          f"Data as of {m['ts']} | SPY ${m['spy']} | 200-SMA ${m['sma200']:.2f} | 45D Net GEX {fmtB(m['gex45'])} | "
          f"VIX {m['vix']} (VIX9D {m['vix9d']} / VIX3M {m['vix3m']}) | ^SOX {m['sox']}% vs ^BKX {m['bkx']}%",
          f"0DTE walls: put {m['put_wall_0dte']} / call {m['call_wall_0dte']} | 45D walls: put {m['put_wall_45d']} / call {m['call_wall_45d']}",
@@ -468,6 +468,45 @@ def _housekeeping():
         print(f"memos index error: {ex}", file=sys.stderr)
 
 
+
+# ---------------------------------------------------------------- CEO questions / decisions
+QFILE, DFILE = P("pod", "ceo_questions.json"), P("pod", "ceo_decisions", "latest_decisions.json")
+
+
+def ceo_decisions_block():
+    q, d = rj(QFILE, {}) or {}, rj(DFILE, {}) or {}
+    L = ["--- CEO DECISIONS & STANDING DIRECTIVES ---"]
+    if not d or d.get("status") in (None, "pending_ceo_input") or not d.get("responses"):
+        n = len(q.get("questions", [])) if q.get("status") == "awaiting_ceo" else 0
+        L.append(f"Status: PENDING CEO INPUT ({n} open question(s) in pod/ceo_questions.json) — use desk defaults until answered.")
+    else:
+        labels = {qq["id"]: (qq["title"], {o["value"]: o["label"] for o in qq.get("options", [])}) for qq in q.get("questions", [])}
+        L.append(f"Status: {d.get('status')} · submitted {d.get('submitted_ct')} · set {d.get('prompt_set_id')}")
+        for k, v in (d.get("responses") or {}).items():
+            t, opts = labels.get(k, (k, {}))
+            vals = v if isinstance(v, list) else [v]
+            L.append(f" • {t}: " + "; ".join(opts.get(x, str(x)) for x in vals))
+        if d.get("risk_pct") is not None:
+            L.append(f" • Active CEO risk cap per shot: {d['risk_pct']}%")
+    if d.get("ceo_note"):
+        L.append(f" • CEO note: {d['ceo_note']}")
+    return "\n".join(L)
+
+
+def post_questions(path):
+    """CIO helper: validate a questions JSON file and publish it to pod/ceo_questions.json; resets decisions to pending."""
+    q = rj(path)
+    if not q or not isinstance(q.get("questions"), list) or not q.get("prompt_set_id"):
+        sys.exit("ERROR: questions file needs prompt_set_id and questions[]")
+    for qq in q["questions"]:
+        if qq.get("type") not in ("single", "multi", "text") or not qq.get("id"):
+            sys.exit(f"ERROR: bad question {qq.get('id')}")
+    q.setdefault("created_ct", iso_ct()); q["status"] = "awaiting_ceo"
+    wj(QFILE, q)
+    wj(DFILE, {"prompt_set_id": q["prompt_set_id"], "status": "pending_ceo_input", "submitted_ct": None, "responses": {}, "ceo_note": (rj(DFILE, {}) or {}).get("ceo_note", "")})
+    return q
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
@@ -491,12 +530,15 @@ def main(argv=None):
     g = sp.add_parser("grade"); g.add_argument("--now")
     sp.add_parser("build-memos-index")
     sp.add_parser("bridge-ledger")
+    pq = sp.add_parser("post-questions"); pq.add_argument("file")
     a = ap.parse_args(argv)
     if a.cmd in ("status", "log-signal", "grade"):
         _housekeeping()
     if a.cmd == "build-memos-index":
         idx = build_memos_index()
         print(f"memos_index.json: {idx['count']} memo(s) — " + ", ".join(f"{r['role']}={r['count']}" for r in idx["roles"]))
+    elif a.cmd == "post-questions":
+        q = post_questions(a.file); print(f"posted {len(q['questions'])} question(s) as {q['prompt_set_id']}")
     elif a.cmd == "bridge-ledger":
         print(f"bridged {bridge_specialist_ledger()} specialist entr(ies)")
     elif a.cmd == "status":

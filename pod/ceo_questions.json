@@ -1,0 +1,47 @@
+{
+  "prompt_set_id": "CEO-Q-2026-11-05-POSTCLOSE",
+  "created_ct": "2026-11-05T19:05:00-0600",
+  "session_target": "2026-11-06",
+  "briefing_ref": "pod/cio_briefings/2026-11-05_1712-ct-post-close_cio_briefing.md",
+  "status": "awaiting_ceo",
+  "questions": [
+    {
+      "id": "risk_budget",
+      "title": "1. Friday Tactical Risk Budget",
+      "detail": "VIX is 28.18 (backwardated under VIX9D 32.66). Confirm per-trade risk cap for the Risk Sizer.",
+      "type": "single",
+      "default": "0.25_shot_0.50_cap",
+      "options": [
+        {"value": "0.25_shot_0.50_cap", "label": "Approve 0.25% / shot (0.50% ceiling) — Recommended", "risk_pct": 0.25},
+        {"value": "0.125_shot_0.25_cap", "label": "Tighter: 0.125% / shot (0.25% ceiling)", "risk_pct": 0.125},
+        {"value": "0.00_stand_down", "label": "Stand Down Friday (0% tactical risk — watch only)", "risk_pct": 0.0}
+      ]
+    },
+    {
+      "id": "approved_scenarios",
+      "title": "2. Pre-Approve Conditional Friday Scenarios",
+      "detail": "Pre-approved scenarios require zero math at the open—only execute if every trigger condition prints.",
+      "type": "multi",
+      "default": ["scenario_a"],
+      "options": [
+        {"value": "scenario_a", "label": "Scenario A — Intraday 30m OR Breakdown / $735–$740 Rejection Short (0.25%)"},
+        {"value": "scenario_b", "label": "Scenario B — PTJ Macro Acceptance < $730.15 200-DMA Short (≤0.25%)"},
+        {"value": "scenario_c", "label": "Scenario C — Climax Sweep < $730.15 + Reclaim Counter-Trend Long (0.125%)"},
+        {"value": "veto_all", "label": "Veto All Tactical Scenarios (Observe Only)", "exclusive": true}
+      ]
+    },
+    {
+      "id": "buffett_bucket",
+      "title": "3. Buffett Value Bucket (GOOGL / META & Wash-Sale Check)",
+      "detail": "GOOGL & META clear 25% MoS only on maintenance-capex owner earnings; AI hardware remains above MoS.",
+      "type": "single",
+      "default": "wait_deeper_mos",
+      "options": [
+        {"value": "wait_deeper_mos", "label": "Wait Patiently — Hold cash for full-FCF 25–35% Margin of Safety"},
+        {"value": "check_wash_sale_first", "label": "Run Wash-Sale Check first, then stage 1/3 tranche watch on GOOGL/META"},
+        {"value": "upload_csv_next", "label": "I'll upload trade history CSV first so wash_sale_tracker_v2.py can verify"}
+      ]
+    }
+  ],
+  "directive_note": "Open: add any standing CEO note, override, or question for the CIO in the free-text box."
+}

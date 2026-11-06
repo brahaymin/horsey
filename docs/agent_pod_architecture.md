@@ -81,3 +81,32 @@ Effective weight = mean of the currently active regime weights (`short_gamma_bac
 | 8:30 AM–3:00 PM | Hourly snapshots; **inflection alerts** only when a conditional trigger fires (e.g. 200-SMA break, $735 reclaim) — arrives as a ready ticket | Confirm or skip; no math |
 | **3:15 PM** | **Post-close summary**: blotter P&L in R, `pod_engine.py grade`, scorecard weight changes | Read; adjust risk appetite |
 | Weekly | Scorecard review; Buffett watchlist refresh | Reallocate capital between lenses |
+
+## 5. CEO Decisions & Questions Loop (in-app, zero server)
+
+Every new CIO briefing **must** be accompanied by `pod/ceo_questions.json`. The CEO answers in **Tab 1 → CEO Decisions & Standing Directives**; answers land in `pod/ceo_decisions/`.
+
+```text
+CIO writes briefing + questions ──► pod/ceo_questions.json (status: awaiting_ceo)
+CEO answers in web app ──► localStorage (always) + GitHub Contents API (if a token is saved in that browser)
+                          └► pod/ceo_decisions/latest_decisions.json + pod/ceo_decisions/YYYY-MM-DD_HHMM_ceo_decision.json
+Hourly sync_github_archive.py ──► git pull --rebase --autostash (picks up decisions) ──► pod_engine.py status prints them first
+```
+
+**Publishing questions (CIO):** write a draft JSON, then `python3 scripts/pod_engine.py post-questions draft.json` (validates, publishes, and resets decisions to `pending_ceo_input`).
+
+**`pod/ceo_questions.json` schema**
+
+| Field | Type | Notes |
+|---|---|---|
+| `prompt_set_id` | string | e.g. `CEO-Q-2026-11-05-POSTCLOSE` |
+| `created_ct` | ISO-8601 CT | |
+| `session_target` | date | session the decisions govern |
+| `briefing_ref` | path | the CIO briefing the questions come from |
+| `status` | `awaiting_ceo` \| `answered` \| `expired` | |
+| `questions[]` | array | `{id, title, detail, type: single\|multi\|text, default, options[]}` |
+| `options[]` | array | `{value, label, risk_pct?, exclusive?}` — `exclusive: true` (e.g. `veto_all`) clears all other picks in a `multi` question; `risk_pct` syncs the Tab 5 Risk Sizer |
+
+**`pod/ceo_decisions/latest_decisions.json`**: `{prompt_set_id, status: pending_ceo_input|submitted, submitted_ct, responses: {question_id: value|[values]}, risk_pct, ceo_note, source}`.
+
+**Security:** the optional GitHub fine-grained token (scoped to `brahaymin/horsey`, *Contents: Read & Write* only) lives solely in that browser's `localStorage["horsey_gh_pat"]` — never in the repo. Without a token, the CEO uses *Copy & Open CIO in Grok Bot*.
