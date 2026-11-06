@@ -66,7 +66,16 @@ code{background:#0b1220;padding:1px 5px;border-radius:4px;font-size:12px}
 .err{background:#3b0d16;border:1px solid #7f1d1d;padding:10px;border-radius:8px;display:none;margin-top:10px}
 footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
 .flash{animation:fl 1s}@keyframes fl{from{background:#0c4a6e}to{background:transparent}}
-</style></head><body>
+</style><style>
+.podban{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;text-align:center}
+.podban .nd{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:12.5px;font-weight:700}
+.podban .nd small{display:block;font-weight:400;color:var(--mut);font-size:11px}.podban .ar{color:var(--acc);font-weight:800}
+.podban .grp{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;border:1px dashed var(--line);border-radius:12px;padding:6px}
+.stc h3{margin:0 0 4px;font-size:15px}.stc .stance{font-weight:800;color:var(--warn);font-size:12.5px;margin-bottom:6px}.stc ul{margin:6px 0 0 18px;padding:0;font-size:13px}.stc li{margin:3px 0}
+.calc{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}.calc label{font-size:11px;color:var(--mut);text-transform:uppercase;display:block}.calc input,.calc select{width:100%;box-sizing:border-box}
+.fw li{list-style:none;margin:3px 0}.fw{padding:0;margin:6px 0}.verdict{font-weight:800;font-size:15px}
+</style>
+</head><body>
 <div class="topbar"><div class="wrap">
  <div class="brand">SPY Gamma Structure &amp; Regime Monitor<small id="asof">Loading…</small></div>
  <select id="snapSel" aria-label="Historical snapshot"></select>
@@ -100,6 +109,7 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
  <button data-tab="rs">3. AI vs. Banks &amp; Futures</button>
  <button data-tab="news">4. Headlines &amp; Raw .md</button>
  <button data-tab="play">5. Trader Playbook (5 Legends + 50 Mistakes)</button>
+ <button data-tab="pod">6. Agent Pod &amp; Blotter</button>
  <span class="sp"></span>
  <button data-tab="all">▦ All Panels</button>
 </nav>
@@ -150,6 +160,31 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
   <a href="https://github.com/brahaymin/horsey/blob/main/docs/day_trading_methodologies_and_50_mistakes.md" target="_blank" rel="noopener">Raw .md on GitHub ↗</a>
  </div><div class="note" id="pbcount" style="margin:4px 0 0"></div></div>
  <div id="pb" class="md">Loading playbook…</div></div>
+</section>
+<section class="panel" id="p-pod"><div class="phead">6 · Agent Pod &amp; Blotter <span class="note">(Paper / Architecture Demo — Not Live Financial Advice)</span></div>
+ <div class="card"><div class="podban" id="podBanner"></div>
+  <div class="note" style="text-align:center;margin-top:6px"><a href="https://github.com/brahaymin/horsey/blob/main/docs/agent_pod_architecture.md" target="_blank" rel="noopener">📘 CEO Architecture Manual (docs/agent_pod_architecture.md) ↗</a> · <span id="podAsOf"></span></div></div>
+ <div class="card" id="podCio" style="margin-top:12px"></div>
+ <div class="grid two" id="podCards" style="margin-top:12px"></div>
+ <div class="card" style="margin-top:12px"><h2 style="margin:0 0 8px">Pre-Trade Risk &amp; Order Ticket Calculator <span class="note">mirrors scripts/pod_engine.py size-ticket</span></h2>
+  <div class="calc">
+   <div><label>Account equity $</label><input type="number" id="cEq" value="50000"></div>
+   <div><label>Risk % (cap 1.0)</label><input type="number" id="cRisk" value="0.5" step="0.05"></div>
+   <div><label>Instrument</label><select id="cIns"><option value="stock">Stock / ETF</option><option value="option_call">Option call (premium)</option><option value="option_put" selected>Option put (premium)</option></select></div>
+   <div><label>Direction</label><select id="cDir"><option>long</option><option>short</option></select></div>
+   <div><label>Strategy agent</label><select id="cAg"><option value="tape">Intraday Tape &amp; Gamma (3R)</option><option value="ptj">PTJ Macro (5R)</option><option value="buf">Buffett Value (3R)</option></select></div>
+   <div><label>Entry (price or premium)</label><input type="number" id="cEn" value="1.85" step="0.01"></div>
+   <div><label>Hard stop</label><input type="number" id="cSt" value="1.25" step="0.01"></div>
+   <div><label>Target 1 (blank = 3R)</label><input type="number" id="cT1" step="0.01"></div>
+   <div><label>Target 2 (blank = 5R)</label><input type="number" id="cT2" step="0.01"></div>
+   <div><label>SPY ref (no-man's-land)</label><input type="number" id="cRef" step="0.01"></div>
+   <div><label>Time stop</label><input type="text" id="cTs" value="45m if no follow-through"></div>
+   <div><label>VIX (auto) / drawdown</label><div class="row"><input type="number" id="cVix" step="0.01" style="flex:1"><label style="text-transform:none"><input type="checkbox" id="cDd"> DD</label></div></div>
+  </div><div id="cOut" style="margin-top:10px"></div></div>
+ <div class="grid two" style="margin-top:12px">
+  <div class="card"><h2 style="margin:0 0 8px">Self-Training Calibration Scorecard</h2><div class="tw"><table id="podScore"></table></div><div class="note" id="podScoreNote"></div></div>
+  <div class="card"><h2 style="margin:0 0 8px">Paper Blotter</h2><div class="tw"><table id="podBlot"></table></div></div>
+ </div>
 </section>
 </main>
 <footer class="wrap">Zero trade ideas · Public Cboe &amp; Yahoo Finance feeds · All times Central Time (CT, America/Chicago)<br>Informational market-structure description only. GEX is a model proxy from open interest; zero-γ is a model estimate.</footer>
@@ -334,8 +369,8 @@ function renderRuler(){const{sp,g45,g0}=heroData();const price=LIVE.spy_price??s
 function resizeCharts(){requestAnimationFrame(()=>Object.values(charts).forEach(ch=>{try{ch.resize();ch.update("none")}catch(e){}}))}
 function showTab(t){st.tab=t;document.body.classList.toggle("all",t==="all");
  [...$("tabs").querySelectorAll("button")].forEach(b=>b.classList.toggle("on",b.dataset.tab===t));
- ["gamma","px","rs","news","play"].forEach(k=>$("p-"+k).classList.toggle("show",t==="all"?k!=="play":k===t));
- if(t==="play")loadPlaybook();if(t==="news"||t==="all")loadMd();resizeCharts()}
+ ["gamma","px","rs","news","play","pod"].forEach(k=>$("p-"+k).classList.toggle("show",t==="all"?(k!=="play"):k===t));
+ if(t==="play")loadPlaybook();if(t==="pod"||t==="all")loadPod();if(t==="news"||t==="all")loadMd();resizeCharts()}
 $("tabs").onclick=e=>{const b=e.target.closest("button");if(b){showTab(b.dataset.tab);const y=$("tabs").getBoundingClientRect().top+scrollY-$("tabs").offsetTop+0;}};
 $("qbPlay").onclick=()=>{showTab("play");$("tabs").scrollIntoView({behavior:"smooth"})};
 function fixSticky(){$("tabs").style.top=document.querySelector(".topbar").offsetHeight+"px"}addEventListener("resize",()=>{fixSticky();if(S)renderRuler()});
@@ -395,7 +430,57 @@ document.addEventListener("keydown",e=>{if(e.key==="Escape")$("feedModal").class
  const want=new URLSearchParams(location.search).get("snap");let start=0;if(want){const i=idx.snapshots.findIndex(s=>s.id===want);if(i>=0)start=i}
  $("snapSel").onchange=()=>load(+$("snapSel").value);
  await F.loadLog();await load(start);F.start();
- const tab=(location.hash||"").replace("#","");if(["gamma","px","rs","news","play","all"].includes(tab))showTab(tab);fixSticky()})().catch(e=>err(e.message));
-addEventListener("hashchange",()=>{const t=location.hash.slice(1);if(["gamma","px","rs","news","play","all"].includes(t))showTab(t)});
+ const tab=(location.hash||"").replace("#","");if(["gamma","px","rs","news","play","pod","all"].includes(tab))showTab(tab);fixSticky()})().catch(e=>err(e.message));
+addEventListener("hashchange",()=>{const t=location.hash.slice(1);if(["gamma","px","rs","news","play","pod","all"].includes(t))showTab(t)});
 
+
+// ---------- Tab 6: Agent Pod & Blotter (mirrors scripts/pod_engine.py) ----------
+let POD=null;
+
+async function loadPod(){if(POD)return;POD={};
+ const g=async u=>{try{const r=await fetch(u,{cache:"no-cache"});if(!r.ok)return null;return u.endsWith(".jsonl")?(await r.text()).split("\n").filter(Boolean).map(l=>{try{return JSON.parse(l)}catch(e){return null}}).filter(Boolean):await r.json()}catch(e){return null}};
+ [POD.roster,POD.score,POD.state,POD.blot]=await Promise.all([g("pod/roster.json"),g("pod/scorecard.json"),g("pod/signals/latest_pod_state.json"),g("pod/ledger/paper_blotter.jsonl")]);
+ renderPod()}
+function renderPod(){const R=POD.roster||{},S=POD.state||{},SC=POD.score||{},A=(R.agents||[]),by=id=>A.find(a=>a.id===id)||{};
+ const nd=(t,s)=>`<div class="nd">${t}<small>${s}</small></div>`,ar=x=>`<span class="ar">${x}</span>`;
+ const sp=A.filter(a=>a.role==="specialist");
+ $("podBanner").innerHTML=nd("👤 CEO","Human Principal")+ar("⇄")+nd("🛡️ CIO &amp; Risk Gatekeeper","firewall · sizing · synthesis")+ar("→")+
+  `<div class="grp">${sp.map(a=>nd(esc(a.name),esc(a.timeframe))).join("")}</div>`+ar("⇠")+
+  `<div class="grp">${nd("📡 SPY Gamma Data Engine","Layer 0 · hourly")}${nd("📊 Self-Training Auditor","grade → scorecard")}</div>`;
+ $("podAsOf").textContent=S.as_of_ct?`Stances as of ${S.as_of_ct.replace("T"," ").slice(0,16)} CT`:"";
+ const m=S.market||{},cs=S.cio_synthesis||{};
+ $("podCio").innerHTML=`<h2 style="margin:0 0 6px">🛡️ CIO &amp; Risk Gatekeeper — Synthesis</h2><div class="row" style="gap:6px;margin-bottom:6px">
+  <span class="pill">SPY $${n(m.spy_close)}</span><span class="pill">200-SMA $${n(m.sma200)}</span><span class="pill neg">45D GEX ${B(m.net_gex_45d)}</span>
+  <span class="pill neg">VIX ${n(m.vix)} · VIX9D ${n(m.vix9d)} (backwardated)</span><span class="pill">^SOX ${pct(m.sox_1d_pct)} vs ^BKX ${pct(m.bkx_1d_pct)}</span>
+  <span class="pill" style="color:var(--warn)">Risk throttle ${(cs.risk_throttle_pct||[]).join("%–")}%</span></div><div>${esc(cs.summary)}</div><div class="note">${esc(S.disclaimer)}</div>`;
+ const ag=S.agents||{};
+ $("podCards").innerHTML=Object.entries(ag).map(([id,x])=>{const w=SC.agents?.[id]?.current_effective_weight;
+  return `<div class="card stc"><h3>${esc(x.name||by(id).name)} ${w!=null?`<span class="pill">weight ${(w*100).toFixed(1)}%</span>`:""}</h3><div class="stance">${esc(x.stance)}</div><div>${esc(x.headline)}</div>
+  ${x.observations?`<ul>${x.observations.map(o=>`<li>${esc(o)}</li>`).join("")}</ul>`:""}
+  ${x.conditional_triggers?`<div class="note" style="margin-top:6px;text-transform:uppercase">Conditional structural triggers</div><ul>${x.conditional_triggers.map(o=>`<li>${esc(o)}</li>`).join("")}</ul>`:""}
+  <div class="note">id ${esc(id)}</div></div>`}).join("");
+ const rows=Object.entries(SC.agents||{});
+ $("podScore").innerHTML=`<tr><th>Agent</th><th>Logged</th><th>Graded</th><th>Win %</th><th>Avg R</th><th>Brier</th><th>w: SG/Back</th><th>w: +G/Cont</th><th>w: &lt;200</th><th>Eff. weight</th></tr>`+
+  rows.map(([id,a])=>{const rw=a.regime_weights||{},f=v=>v==null?"—":n(v,2);return `<tr><td>${esc(a.name)}</td><td>${a.signals_logged??0}</td><td>${a.graded_count??0}</td><td>${a.win_rate==null?"—":n(a.win_rate*100,0)+"%"}</td><td>${f(a.avg_realized_r)}</td><td>${f(a.brier_score)}</td><td>${f(rw.short_gamma_backwardation)}</td><td>${f(rw.positive_gamma_contango)}</td><td>${f(rw.below_200sma)}</td><td>${a.current_effective_weight==null?"—":n(a.current_effective_weight*100,1)+"%"}</td></tr>`}).join("");
+ $("podScoreNote").textContent=(SC.method||"")+(SC.active_regime_tags?` Active regime: ${SC.active_regime_tags.join(", ")}.`:"");
+ const bl=POD.blot||[];
+ $("podBlot").innerHTML=`<tr><th>Ticket</th><th>Tag</th><th>Symbol</th><th>Side × Qty</th><th>Entry / Stop</th><th>T1 / T2</th><th>$ Risk</th><th>Time stop</th><th>Verdict</th></tr>`+
+  (bl.length?bl.map(t=>`<tr><td>${esc(t.ticket_id)}</td><td>${esc(t.tag)}</td><td>${esc(t.symbol)} ${esc(t.instrument)}</td><td>${esc(t.direction)} × ${t.quantity}</td><td>${t.entry} / ${t.stop}</td><td>${t.target1} / ${t.target2}</td><td>$${n(t.actual_dollar_risk)} (${t.risk_pct_effective}%)</td><td>${esc(t.time_stop||"—")}</td><td class="${t.verdict==="APPROVED_FOR_STAGING"?"pos":"neg"}">${esc(t.verdict)}</td></tr>`).join(""):`<tr><td colspan="9" class="mut">No paper tickets yet.</td></tr>`);
+ if(!$("cVix").value&&m.vix!=null)$("cVix").value=m.vix;if(!$("cRef").value&&m.spy_close!=null)$("cRef").value=m.spy_close;calcTicket()}
+function calcTicket(){const v=id=>{const x=$(id).value;return x===""?null:+x};const ins=$("cIns").value,opt=ins!=="stock",dir=opt?"long":$("cDir").value,mult=opt?100:1;
+ const eq=v("cEq")||0,req=v("cRisk")||0,en=v("cEn"),stp=v("cSt"),vix=v("cVix"),dd=$("cDd").checked,ref=v("cRef"),ts=$("cTs").value.trim(),minRR=$("cAg").value==="ptj"?5:3;
+ const m=POD?.state?.market||{},sg=dir==="long"?1:-1,chk=[];
+ const inv=en!=null&&stp!=null&&sg*(en-stp)>0;chk.push([inv,"Hard invalidation present & correct side",inv?"":"stop missing or on wrong side"]);
+ const r=inv?Math.abs(en-stp):null,t1=v("cT1")??(r?en+sg*3*r:null),t2=v("cT2")??(r?en+sg*5*r:null);
+ const best=r?Math.max(...[t1,t2].filter(x=>x!=null).map(t=>sg*(t-en)/r)):null;chk.push([best!=null&&best>=minRR-1e-9,`Asymmetry ≥ ${minRR}R`,best!=null?n(best,2)+"R":""]);
+ let eff=Math.min(req,1);chk.push([req<=1,"Risk % ≤ 1.0% cap",`requested ${req}% → ${eff}%`]);
+ const th=[];if(dd)th.push("drawdown");if(vix!=null&&vix>25)th.push(`VIX ${vix} > 25`);if(th.length)eff/=2;chk.push([true,"Vol-regime / drawdown throttle applied",th.length?"halved: "+th.join(", "):"not required"]);
+ let lo=m.put_wall_0dte,hi=m.call_wall_0dte,nml=false;if(ref!=null&&lo&&hi){const w=hi-lo;nml=ref>lo+.3*w&&ref<hi-.3*w}chk.push([!nml,"Not mid-range no-man's-land vs 0DTE walls",`SPY ${ref??"—"} vs ${lo}/${hi}`]);
+ const tsOk=!!ts||!opt;chk.push([tsOk,"Time stop defined (mandatory for options)",ts||"—"]);
+ const bud=eq*eff/100,qty=r?Math.floor(bud/(r*mult)):0,ok=chk.every(c=>c[0])&&qty>=1;
+ $("cOut").innerHTML=`<div class="verdict ${ok?"pos":"neg"}">${ok?"✅ APPROVED FOR STAGING":"⛔ BLOCKED"} — ${dir.toUpperCase()} ${qty} ${opt?"contract(s)":"share(s)"} @ ${en??"—"} · stop ${stp??"—"}</div>
+ <div class="row" style="gap:6px;margin:6px 0"><span class="pill">Risk ${n(eff,3)}% = $${n(bud)} budget</span><span class="pill">Actual risk $${r?n(qty*r*mult):"0.00"}</span><span class="pill">Notional $${en!=null?n(qty*en*mult):"—"}</span>
+ <span class="pill pos">T1 ${t1!=null?n(t1):"—"}</span><span class="pill pos">T2 ${t2!=null?n(t2):"—"}</span><span class="pill">OCO: 50% @T1, trail to entry, 50% @T2</span></div>
+ <ul class="fw">${chk.map((c,i)=>`<li>${c[0]?"✅":"❌"} ${i+1}. ${c[1]} <span class="mut">${esc(c[2])}</span></li>`).join("")}${r&&qty<1?'<li>⚠️ Rounds to 0 units at this budget.</li>':""}</ul>`}
+["cEq","cRisk","cIns","cDir","cAg","cEn","cSt","cT1","cT2","cRef","cTs","cVix","cDd"].forEach(id=>{$(id).addEventListener("input",calcTicket);$(id).addEventListener("change",calcTicket)});
 </script></body></html>

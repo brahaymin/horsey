@@ -1,0 +1,299 @@
+{
+  "schema_version": "pod_signal_v1",
+  "agent": "Intraday Tape & Gamma Tactician",
+  "agent_id": "ee33b632-6c42-4d43-bf17-665bc939db17",
+  "lens": "Schwartz / Raschke / B-N-F / Cohen",
+  "written_at_ct": "2026-11-05T18:40:16-0600",
+  "session_date_source": "2026-11-05",
+  "next_rth_session": "2026-11-06",
+  "market_session_state": "CLOSED_AFTER_HOURS",
+  "market_session_note": "Equities RTH closed. Snapshot is post-close (17:12 CT). Current wall-clock ~18:40 CT Thu Nov 5, 2026 (America/Chicago). Nov 6 SPY expiry is 1DTE in this snapshot and becomes 0DTE at Friday RTH open. All triggers below are framed for Friday Nov 6, 2026 RTH (and overnight Globex levels as context only). Do NOT treat delayed Globex quotes as live fills.",
+  "source_snapshot": {
+    "path": "/workspace/horsey/latest.json",
+    "md_path": "/workspace/horsey/latest.md",
+    "snapshot_rel": "snapshots/2026/11/2026-11-05/1712-ct-post-close.json",
+    "timestamp_ct": "2026-11-05T17:12:12-0600",
+    "timestamp_utc": "2026-11-05T23:12:12.899191+00:00",
+    "run_tag": "post-close",
+    "session_date": "2026-11-05",
+    "file_mtime_utc": "2026-11-06T00:13:58+00:00"
+  },
+  "verified_metrics": {
+    "spy_regular_close": 733.0,
+    "spy_ah_indication": 731.15,
+    "spy_open": 765.47,
+    "spy_high": 765.97,
+    "spy_low": 732.71,
+    "spy_previous_close": 766.81,
+    "spy_1d_pct": -4.4092,
+    "spy_volume": 120886017,
+    "spy_rvol_20d": 2.9539,
+    "spy_sma20": 765.5275,
+    "spy_sma50": 766.396,
+    "spy_sma200": 730.151,
+    "spy_sma200_dist_pct": 0.3902,
+    "approx_10d_ema_from_16d_history": 752.63,
+    "gex_spot_ref": 731.19,
+    "net_gex_next_session_nov6_bn": -2.659573,
+    "net_gex_45d_bn": -13.85133,
+    "net_gex_opex_nov20_bn": -6.383318,
+    "net_gex_all_bn": -16.105812,
+    "call_wall_nov6": 760.0,
+    "put_wall_nov6": 735.0,
+    "call_wall_45d": 770.0,
+    "put_wall_45d": 740.0,
+    "zero_gamma_nov6_model": 757.1885,
+    "zero_gamma_45d_model": 765.9808,
+    "node_735_nov6_net_gex_m": -367.056,
+    "node_735_nov6_put_oi": 23652,
+    "node_735_nov6_call_oi": 387,
+    "vix": 28.18,
+    "vix_1d_pct": 69.6568,
+    "vix9d": 32.66,
+    "vix3m": 25.55,
+    "vvix": 134.99,
+    "vol_term_regime": "backwardated_implied_volatility_tenors",
+    "vix_over_vix3m": 1.1029,
+    "nvda_1d_pct": -9.259,
+    "sox_1d_pct": -12.2461,
+    "smh_1d_pct": -11.2122,
+    "bkx_1d_pct": -3.5673,
+    "kbwb_1d_pct": -3.5393,
+    "nvda_close": 181.6,
+    "sox_close": 9011.1377,
+    "bkx_close": 171.2067,
+    "es_quote": 7364.75,
+    "es_quote_ts_ct": "2026-11-05 17:02 CT",
+    "es_rth_close": 7353.0,
+    "es_overnight_range_at_snapshot": [
+      7351.5,
+      7373.0
+    ],
+    "nq_quote": 26667.25,
+    "nq_rth_close": 26604.0,
+    "nq_overnight_range_at_snapshot": [
+      26584.0,
+      26717.0
+    ]
+  },
+  "regime_tags": [
+    "negative_short_gamma_all_scopes",
+    "high_rvol_trend_expansion",
+    "schwartz_red_light_below_10ema_20sma_50sma",
+    "knife_edge_above_200sma",
+    "vix_backwardation",
+    "vvix_stress_spike",
+    "ai_semis_leadership_breakdown",
+    "banks_relative_outperformance",
+    "never_fade_high_rvol_short_gamma"
+  ],
+  "regime_classification": {
+    "gex_sign": "NEGATIVE",
+    "gex_playbook": "trend_expansion_amplification \u2014 do NOT mean-revert until structural exhaustion",
+    "rvol": "2.9539x prior-20 mean \u2014 institutional participation, not noise",
+    "trend_filter_schwartz": "RED LIGHT \u2014 SPY 733 below approx 10d EMA ~752.63, SMA20 765.53, SMA50 766.40; only +0.39% above SMA200 730.15",
+    "vol_cycle_raschke": "EXPANSION \u2014 VIX9D 32.66 > VIX 28.18 > VIX3M 25.55; VVIX 134.99; RVOL ~3x",
+    "day_type_prior_session": "Trend-down expansion / 80-20-like bar (open near high 765.47/765.97, close near low 733/732.71)",
+    "primary_bias_friday": "Respect downside / sell-strength until exhaustion confirmation; stand down on blind longs"
+  },
+  "levels_ladder_spy": {
+    "prior_rth_high": 765.97,
+    "prior_rth_low": 732.71,
+    "prior_rth_close": 733.0,
+    "ah_indication": 731.15,
+    "sma200": 730.151,
+    "put_wall_nov6_0dte_friday": 735.0,
+    "secondary_put_gamma_nov6": [
+      740.0,
+      750.0,
+      730.0
+    ],
+    "call_wall_nov6_0dte_friday": 760.0,
+    "secondary_call_gamma_nov6": [
+      755.0,
+      745.0
+    ],
+    "put_wall_45d": 740.0,
+    "call_wall_45d": 770.0,
+    "model_zero_gamma_nov6": 757.1885,
+    "model_zero_gamma_45d": 765.9808,
+    "node_735": "Primary Nov-6 put-gamma wall; net GEX ~-$367m/1%; put OI 23,652 vs call OI 387",
+    "note": "Model zero-gamma is a spot-repriced estimate, NOT a cumulative-strike flip (latest.md: no cumulative crossing). Treat as zone."
+  },
+  "cohen_40_30_30": {
+    "market_40": {
+      "spy_1d_pct": -4.4092,
+      "read": "Broad risk-off; SPY broke prior-5 and prior-20 lows (750.36). Market beta is bearish."
+    },
+    "sector_30": {
+      "ai_semis": {
+        "sox_1d_pct": -12.2461,
+        "smh_1d_pct": -11.2122,
+        "vs_spy_pp": "~-7.8 to -6.8 \u2014 leadership breakdown"
+      },
+      "banks": {
+        "bkx_1d_pct": -3.5673,
+        "kbwb_1d_pct": -3.5393,
+        "vs_spy_pp": "+0.84 to +0.87 \u2014 relative outperformance but both below 200 SMA"
+      },
+      "read": "Move is AI/semis-led decline, not a banks-led cascade. Fragile group leadership on the downside."
+    },
+    "stock_30": {
+      "weak": {
+        "NVDA": -9.259,
+        "VRT": -14.0209,
+        "AVGO": -10.4307,
+        "TSM": -10.777
+      },
+      "relative_hold": {
+        "MSFT": -3.575,
+        "CEG": -2.4703
+      },
+      "read": "Within tech, MSFT held; NVDA/AVGO/VRT led the washout. Prefer relative-strength names only AFTER market regime stabilizes."
+    }
+  },
+  "verified_catalysts": [
+    {
+      "title": "Top Democrats call to rein in AI buildout after midterms sweep",
+      "url": "https://www.cnbc.com/2026/11/05/democrats-data-center-restrictions-midterms.html",
+      "published": "2026-11-05 15:16 EST",
+      "caveat": "Political proposals/pledges \u2014 NOT proof of an enacted national moratorium."
+    },
+    {
+      "title": "Blue tsunami wipes out $2.5 trillion from Nasdaq, as investors fret about AI trade",
+      "url": "https://www.investing.com/news/stock-market-news/ai-datacenter-stocks-slip-as-democratic-sweep-clouds-expansion-plans-5003196",
+      "published": "2026-11-05; updated 17:18",
+      "caveat": "Policy/permitting risk narrative; not a verified enacted ban."
+    }
+  ],
+  "four_legend_synthesis": {
+    "marty_schwartz": {
+      "filter": "RED LIGHT",
+      "detail": "Price below 10d EMA (~752.6), SMA20, SMA50. Above SMA200 by only $2.85 / 0.39%. Cross-market: NQ weaker overnight vs ES relatively; semis confirm weakness.",
+      "action": "No bottom fishing. Prefer shorts on failed rallies or stand aside. Scale size DOWN after this violent session (biggest losses follow biggest wins / emotional days).",
+      "divergence": "Banks held above relative lows better than SPY/semis \u2014 healthier than AI complex, not a long signal by itself while RED LIGHT."
+    },
+    "linda_raschke": {
+      "cycle": "Contraction\u2192EXPANSION confirmed (RVOL 2.95x + vol backwardation).",
+      "prior_bar": "80-20-like down bar \u2014 watch Friday opening-range for Turtle Soup / failed breakdown vs continuation.",
+      "pivots": "Mark prior high 765.97, prior low 732.71, close 733, SMA200 730.15, overnight Globex ES range from snapshot 7351.5\u20137373 (stale/partial).",
+      "time_stops": "Mandatory. If setup does not work in stated window, flatten \u2014 no narrative holds."
+    },
+    "takashi_kotegawa_bnf": {
+      "extension": "Semis extremely extended: SOX -21.8% 5d / -28.6% 20d; NVDA -15.0% 5d / -21.2% 20d vs SMA200. Snapback RISK exists but is SECONDARY in short-gamma high-RVOL.",
+      "laggard_lens": "VRT/SOX more extended than MSFT. Laggard snapbacks only after panic volume climax + reclaim of a defined MA/level.",
+      "guardrail": "Liquidity only; cut fast; do not marry the bounce narrative."
+    },
+    "steven_cohen": {
+      "decomp": "40% market bearish + 30% sector (semis crash, banks relative bid) + 30% stock (MSFT hold vs NVDA washout).",
+      "catalyst_reaction": "AI-regulation headlines coincided with semis underperformance \u2014 price reaction confirms sector stress.",
+      "risk_rule": "If unsure or tape turns, take in half. Small losses, larger winners. No freezing."
+    }
+  },
+  "conviction_0_100": {
+    "regime_read": 92,
+    "primary_trend_continuation_setup": 68,
+    "conditional_exhaustion_long": 28,
+    "overall_actionable_friday": 70
+  },
+  "setups": [
+    {
+      "id": "ITT-2026-11-06-A",
+      "name": "Short-gamma trend continuation / sell failed OR reclaim",
+      "status": "active_watch",
+      "bias": "short",
+      "regime_aligned": true,
+      "instruments": [
+        "ES=F / MES (primary tape)",
+        "SPY Nov 6 (0DTE Friday) or Nov 7 1DTE puts \u2014 liquid strikes near ATM, size by max premium at risk",
+        "QQQ puts as beta expression ONLY if NQ leads breakdown"
+      ],
+      "trigger": "Friday Nov 6 RTH: Let first 30-minute Opening Range (OR) form. ENTER SHORT only on: (1) break and 5-min hold below OR_low AND below prior RTH low 732.71, OR (2) rally into 735\u2013740 put-wall / OR_high zone that FAILS (rejection wick + close back below mid-OR) with RVOL still elevated (>1.5x early). Prefer confirmation from NQ making fresh lows or SOX/NVDA failing simultaneous reclaims.",
+      "hard_invalidation": "SPY 5-min close back above Friday OR_high, OR sustained reclaim/hold above 740 (Nov-6 secondary put-gamma / structural), whichever is LOWER risk distance from entry. For ES: invalidate on reclaim of the mapped OR_high equivalent. No averaging down. Stop only tightens.",
+      "time_stop": "Flatten if price has not progressed at least \u22120.5R within 45\u201360 minutes of entry. No new risk after 14:30 CT. All 0DTE premium risk flat by 14:45 CT unless a runner already booked at T1 with hard lock.",
+      "targets_R": {
+        "R_definition": "Entry to hard_invalidation distance (price or premium)",
+        "T1": "1.5R\u20132.0R \u2014 first scale (often toward 725 area / next downside liquidity if entry ~732\u2013735)",
+        "T2": "3.0R \u2014 second scale (stretch toward 720 if cascade / RVOL remains elevated)",
+        "T3_runner": "Only if 200-SMA 730 fails with accelerating RVOL; trail under rising 5-min swing highs; never widen stop"
+      },
+      "r_multiple_min": 3.0,
+      "sizing_note": "Default risk 0.50% equity; CUT TO 0.25% given extreme VIX backwardation + VVIX 135 (protocol half-size). 0DTE: size by premium at risk, not notional. Correlated QQQ+SPY+NVDA shorts count as ONE beta bet (mistake #6).",
+      "mistakes_guardrails": [
+        "#11 never trade short-gamma expansion as mean-reversion",
+        "#14 never fade high-RVOL trend without failure confirmation",
+        "#1 no averaging down",
+        "#23 no fighting opening drive without OR confirmation",
+        "#10 0DTE decay \u2014 hard time stop",
+        "#3 hard invalidation defined before entry"
+      ]
+    },
+    {
+      "id": "ITT-2026-11-06-B",
+      "name": "Conditional 200-SMA washout reclaim (exhaustion long ONLY)",
+      "status": "conditional",
+      "bias": "long",
+      "regime_aligned": false,
+      "regime_exception": "Allowed ONLY after structural exhaustion \u2014 not a fade of the trend day itself",
+      "instruments": [
+        "ES=F / MES",
+        "SPY 1\u20135 DTE calls or debit debit-spreads (prefer 1\u20135 DTE over naked 0DTE long premium)",
+        "Relative-strength expressions: KBWB or MSFT ONLY as secondary sleeve after index reclaim"
+      ],
+      "trigger": "Friday RTH: (1) Sweep/liquidity probe BELOW SMA200 730.15 and/or prior low 732.71 on a volume climax, THEN (2) reclaim and 5-min hold back above 730.15 AND 735 put-wall, AND (3) banks (^BKX/KBWB) make higher lows while ^SOX/NVDA stop making new lows (Schwartz divergence + Cohen sector). Absent all three, NO LONG.",
+      "hard_invalidation": "5-min close back below the reclaim candle low or back below 730.15 SMA200 \u2014 whichever is first hit. Immediate flatten; no 'hope' hold into the close.",
+      "time_stop": "Must show +0.5R within 30\u201345 minutes (Raschke). If not, exit. No holding a conditional long through lunch lull without T1 booked. Flat 0DTE longs by 14:30 CT.",
+      "targets_R": {
+        "R_definition": "Entry to hard_invalidation",
+        "T1": "1.5R \u2014 scale (often mid-OR or 740 put-wall magnet)",
+        "T2": "3.0R \u2014 only if RVOL cools and price accepts above 740; do not target 760 call wall as base case",
+        "T3_runner": "Not default \u2014 positive-gamma mean-reversion toward model zero-\u03b3 ~757 is aspirational only if net GEX sign flips or RVOL collapses"
+      },
+      "r_multiple_min": 3.0,
+      "sizing_note": "HALF of Setup A max (0.25% \u2192 0.125% equity) \u2014 counter-regime conditional. Schwartz: no ego bottom-fishing.",
+      "mistakes_guardrails": [
+        "#29 no bottom fishing without confirmed reversal structure",
+        "#11/#14 do not treat this as a license to fade open weakness",
+        "#16 treat zero-gamma 757 as zone not a magnet guarantee",
+        "#30 honor time stop",
+        "#39 take in half if unsure after entry"
+      ]
+    },
+    {
+      "id": "ITT-2026-11-06-C",
+      "name": "Stand-down / no mid-range noise",
+      "status": "stand_down",
+      "bias": "flat",
+      "regime_aligned": true,
+      "instruments": [],
+      "trigger": "Price chop between ~735 and ~745 without OR break or rejection pattern; or RVOL collapses into lunch with no level test.",
+      "hard_invalidation": "n/a \u2014 no position",
+      "time_stop": "n/a",
+      "targets_R": {},
+      "r_multiple_min": null,
+      "sizing_note": "Zero risk. Mistake #25/#27 \u2014 no mid-range, no lunch overtrade.",
+      "mistakes_guardrails": [
+        "#25",
+        "#27",
+        "#32 no FOMO"
+      ]
+    }
+  ],
+  "cio_handoff": {
+    "asks": [
+      "Weight this lens high for Friday 0DTE\u20131DTE / ES tactical book; defer to PTJ Macro for multi-day SMA200 inflection sizing (\u22655:1).",
+      "Enforce half-size given VIX9D>VIX>VIX3M and VVIX 134.99.",
+      "Reject any ticket that fades the breakdown without Setup B's three-part exhaustion confirmation.",
+      "scorecard.json not present yet \u2014 no self-assigned calibration weight."
+    ],
+    "firewall_precheck": {
+      "regime_alignment": "PASS for Setup A; CONDITIONAL for Setup B; PASS flat for Setup C",
+      "hard_invalidation": "PASS \u2014 defined on A/B",
+      "asymmetric_payoff": "PASS \u2014 min 3R tactical targets stated",
+      "fixed_fractional": "PASS \u2014 0.25% recommended (half of 0.5% default)",
+      "precomputed_bracket": "PARTIAL \u2014 levels mapped; exact share/contract counts deferred to CIO pod_engine.py + CEO equity",
+      "human_confirmation": "REQUIRED \u2014 no live send"
+    }
+  },
+  "disclaimer": "Structured specialist thesis for CIO review only. Not investment advice. All numbers verified from /workspace/horsey/latest.json post-close snapshot; no fabricated prints. GEX is an OI-side dealer proxy, not observed dealer inventory."
+}

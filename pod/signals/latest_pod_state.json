@@ -1,0 +1,97 @@
+{
+  "disclaimer": "Regime Stance & Conditional Structural Triggers (Paper / Architecture Demo \u2014 Not Live Financial Advice)",
+  "as_of_ct": "2026-11-05T17:12:12-0600",
+  "updated_ct": "2026-11-05T18:45:13-0600",
+  "market": {
+    "spy_close": 733.0,
+    "sma200": 730.15,
+    "net_gex_45d": -13850000000.0,
+    "net_gex_0dte": -2660000000.0,
+    "vix": 28.18,
+    "vix9d": 32.66,
+    "vix3m": 25.55,
+    "sox_1d_pct": -12.25,
+    "bkx_1d_pct": -3.57,
+    "put_wall_0dte": 735,
+    "call_wall_0dte": 760,
+    "put_wall_45d": 740,
+    "call_wall_45d": 770,
+    "spy_1d_pct": -4.41,
+    "rvol_20d": 2.95
+  },
+  "agents": {
+    "05895e3e-1c82-4cec-9ff3-07aa73b5c0db": {
+      "name": "PTJ Macro & Regime Strategist",
+      "stance": "FLAT_DEFENSE_STAND_DOWN \u2014 knife-edge above 200-DMA; no >=5:1 ticket",
+      "headline": "SPY 733.00 / AH 731.15 is +$2.85 (+0.39%) above SMA200 730.151 after -4.41% with RVOL 2.95x; VIX9D 32.66 > VIX 28.18 > VIX3M 25.55; QQQ/SOX already below their 200-DMAs.",
+      "observations": [
+        "Rule1 DEFENSE ALERT: leadership (QQQ -4.94%, SOX -16.75% vs 200-DMA) already failed while SPY tests the line.",
+        "Rule2 FAIL now: no confirmed >=5:1 with tight invalidation; Setups A/B are conditional watches only.",
+        "Rule3 EXTREME: short-gamma proxy (45D -$13.85B), VVIX 134.99, AI/data-center policy shock headlines verified.",
+        "Rule4: no horsey positions/PnL found. Rule5: flat / 0.25% max if a later ticket clears geometry."
+      ],
+      "conditional_triggers": [
+        "IF RTH hold below SMA200 730.151 and under 728 with NQ/SOX fresh lows \u2192 re-evaluate PTJ-2026-11-06-A short only if stop-to-T2 geometry >=5R.",
+        "IF reclaim/hold 735 with RVOL cooling and VIX9D-VIX narrowing \u2192 only then consider PTJ-2026-11-06-B long with hard invalidation back through 730.151."
+      ],
+      "last_signal_id": "SIG-13A01000",
+      "last_signal_ct": "2026-11-05T18:45:13-0600",
+      "last_note": "STAND-DOWN primary. Memos: pod/ptj_macro/2026-11-05_1712-ct-post-close_thesis.json|.md. Ledger appended. No pod_engine size-ticket until trigger prints."
+    },
+    "ee33b632-6c42-4d43-bf17-665bc939db17": {
+      "name": "Intraday Tape & Gamma Tactician",
+      "stance": "active_watch_short_gamma_OR_continuation_Fri_RTH",
+      "headline": "Dealers short gamma (0DTE -$2.66B, 45D -$13.85B) with SPY below the $735 0DTE put wall; RVOL 2.95\u00d7 means moves get amplified, not dampened.",
+      "observations": [
+        "$735 node: 23,652 put OI vs 387 call OI \u2014 now overhead after the break.",
+        "Zero-gamma far above ($757 0DTE / $766 45D) \u2192 no positive-gamma cushion nearby.",
+        "$760 call wall = upper bound; $742.5\u2013$752.5 mid-range is no-man's-land (firewall check #5)."
+      ],
+      "conditional_triggers": [
+        "IF opening range holds below $735 \u2192 continuation structures only, 45-min time stop, stop above $735.",
+        "IF SPY reclaims and holds $735 for 30m \u2192 short-covering toward $740 possible; size at throttled 0.25%."
+      ],
+      "last_signal_id": "SIG-CFD2DF60",
+      "last_signal_ct": "2026-11-05T18:42:50-0600",
+      "last_note": "Setup ITT-2026-11-06-A PRIMARY: Fri RTH short after 30m OR \u2014 break/hold below OR_low AND 732.71, OR reject 735-740. Hard invalidation OR_high or 740. Time stop 45-60m / flat 0DTE by 14:45 CT. Size 0.25% (VIX throttle). Source latest.json 2026-11-05T17:12:12-0600. Market CLOSED \u2014 watch only until Fri open. Memo: pod/intraday_tape_gamma/latest.json"
+    },
+    "e44fa805-3796-4f84-8366-30901208f4ab": {
+      "name": "Buffett Value Compounder",
+      "stance": "PATIENT ACCUMULATION WATCH \u2014 shopping list active; GOOGL/META conditional on AI capex ROIC",
+      "headline": "Panic in semis (-12.25%) can push quality compounders toward 25%\u201335% margin-of-safety zones; banks' milder drop says this is not a credit event yet.",
+      "observations": [
+        "Short-gamma liquidations sell good and bad businesses alike \u2014 the value buyer's opportunity set.",
+        "Only names already on the intrinsic-value watchlist with conservative DCF; stagger in 1/3 tranches.",
+        "Check wash_sale_tracker_v2.py before repurchasing any name sold at a loss in the last 30 days."
+      ],
+      "conditional_triggers": [
+        "IF a watchlist name trades >= 25% below conservative intrinsic value \u2192 stage tranche 1 (paper ticket).",
+        "IF credit stress spreads (^BKX joins semis) \u2192 raise required margin of safety to 35%."
+      ],
+      "last_signal_id": "SIG-E009AAED",
+      "last_signal_ct": "2026-11-05T18:42:52-0600",
+      "last_note": "Memo at pod/buffett_value/2026-11-05_1712-ct-post-close_thesis.md. Most quality compounders still above 25%-35% MoS zones (MSFT 377/327, NVDA 98/85, AVGO 148/128, TSM 172/149, V 209/181, AAPL 127/110, JPM 219/190, BRK-B 392/339). GOOGL ($282.57) and META ($605.08) clear 25% MoS only on maintenance-capex owner earnings, not full FCF. Wash-sale check awaits data/robinhood_options.csv."
+    },
+    "6b3e6d50-8be6-43f5-afa8-24338fa062f5": {
+      "name": "SPY Gamma Structure Monitor",
+      "stance": "DATA ONLY \u2014 no directional bias",
+      "headline": "Post-close snapshot 2026-11-05 17:12 CT verified and archived (latest.json, history/, snapshots/)."
+    }
+  },
+  "cio_synthesis": {
+    "summary": "All three specialist memos now on bus. PTJ = flat defense stand-down (no >=5:1 live). Intraday = Friday short-gamma continuation watch. Buffett = patient MoS shopping list. Regime = short_gamma_backwardation. Throttle 0.25%\u20130.50%; PTJ requires >=5R.",
+    "risk_throttle_pct": [
+      0.25,
+      0.5
+    ],
+    "regime_tags": [
+      "short_gamma_backwardation",
+      "knife_edge_above_200sma"
+    ]
+  },
+  "specialist_memo_dirs": [
+    "pod/intraday_tape_gamma/",
+    "pod/buffett_value/",
+    "pod/ptj_macro/"
+  ]
+}

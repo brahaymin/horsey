@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "pod": "horsey institutional investment & trading pod",
+  "disclaimer": "Paper / Architecture Demo \u2014 Not Live Financial Advice",
+  "updated_ct": "2026-11-05T18:40:00-0600",
+  "principal": {
+    "role": "CEO (Human Principal)",
+    "mandate": "Steers capital allocation, risk appetite, and approves staged tickets; zero manual math under stress.",
+    "interacts_with": [
+      "7ad52fe7-3d09-4438-bfa9-552a13aef8b6"
+    ]
+  },
+  "agents": [
+    {
+      "id": "7ad52fe7-3d09-4438-bfa9-552a13aef8b6",
+      "name": "CIO & Risk Gatekeeper",
+      "role": "cio",
+      "reports_to": "CEO",
+      "layer": 2,
+      "mandate": "Synthesizes all specialist memos, weights them by pod/scorecard.json, enforces the 50-Mistakes Pre-Trade Risk Firewall, runs scripts/pod_engine.py to generate pre-sized bracketed Order Tickets.",
+      "timeframe": "all",
+      "inputs": [
+        "pod/signals/latest_pod_state.json",
+        "pod/scorecard.json",
+        "latest.json"
+      ],
+      "risk_limits": {
+        "risk_pct_default": 0.5,
+        "risk_pct_cap": 1.0,
+        "vix_throttle": "halve size when VIX > 25",
+        "drawdown_mode": "halve size",
+        "min_rr_default": 3.0
+      }
+    },
+    {
+      "id": "6b3e6d50-8be6-43f5-afa8-24338fa062f5",
+      "name": "SPY Gamma Structure Monitor",
+      "role": "data",
+      "reports_to": "7ad52fe7-3d09-4438-bfa9-552a13aef8b6",
+      "layer": 0,
+      "mandate": "Data & market-structure engine; writes verified latest.json, history/timeseries.jsonl and snapshots/ with zero directional bias.",
+      "timeframe": "hourly 8:00 AM\u20133:00 PM CT weekdays + post-close",
+      "inputs": [
+        "Cboe options chains",
+        "Yahoo Finance quotes"
+      ],
+      "risk_limits": {
+        "directional_bias": "none \u2014 data only"
+      }
+    },
+    {
+      "id": "05895e3e-1c82-4cec-9ff3-07aa73b5c0db",
+      "name": "PTJ Macro & Regime Strategist",
+      "role": "specialist",
+      "archetype": "Paul Tudor Jones II",
+      "reports_to": "7ad52fe7-3d09-4438-bfa9-552a13aef8b6",
+      "layer": 1,
+      "mandate": "200-Day SMA boundary, vol term structure (VIX9D/VIX/VIX3M), cross-asset stress (^SOX, ^BKX); only >= 5:1 asymmetric macro/swing inflection setups.",
+      "timeframe": "days\u2013weeks",
+      "inputs": [
+        "latest.json",
+        "history/timeseries.jsonl"
+      ],
+      "risk_limits": {
+        "min_rr": 5.0,
+        "risk_pct_cap": 1.0
+      }
+    },
+    {
+      "id": "ee33b632-6c42-4d43-bf17-665bc939db17",
+      "name": "Intraday Tape & Gamma Tactician",
+      "role": "specialist",
+      "archetype": "Schwartz + Raschke + Kotegawa (BNF) + Cohen 40/30/30",
+      "reports_to": "7ad52fe7-3d09-4438-bfa9-552a13aef8b6",
+      "layer": 1,
+      "mandate": "0DTE\u20135DTE gamma walls, $735/$760 strike nodes, RVOL, opening-range pivots, mechanical time stops.",
+      "timeframe": "minutes\u20135 days",
+      "inputs": [
+        "latest.json",
+        "intraday_30m",
+        "docs/day_trading_methodologies_and_50_mistakes.md"
+      ],
+      "risk_limits": {
+        "min_rr": 3.0,
+        "time_stop": "mandatory",
+        "max_trades_per_day": 3
+      }
+    },
+    {
+      "id": "e44fa805-3796-4f84-8366-30901208f4ab",
+      "name": "Buffett Value Compounder",
+      "role": "specialist",
+      "archetype": "Warren Buffett & Charlie Munger",
+      "reports_to": "7ad52fe7-3d09-4438-bfa9-552a13aef8b6",
+      "layer": 1,
+      "mandate": "Ignores 0DTE noise; intrinsic-value watchlists (moat, ROIC, FCF yield, fortress balance sheet); deploys at 25%\u201335% margin of safety when short-gamma panics put great businesses on sale; checks wash_sale_tracker_v2.py constraints.",
+      "timeframe": "years",
+      "inputs": [
+        "SEC filings",
+        "watchlist",
+        "wash_sale_tracker_v2.py"
+      ],
+      "risk_limits": {
+        "margin_of_safety": "25%\u201335%",
+        "max_position_pct": 10,
+        "wash_sale_check": true
+      }
+    }
+  ],
+  "engines": [
+    {
+      "name": "Risk & Order Sizer",
+      "type": "deterministic",
+      "entrypoint": "python3 scripts/pod_engine.py size-ticket",
+      "owner": "7ad52fe7-3d09-4438-bfa9-552a13aef8b6",
+      "mandate": "6-point 50-Mistakes firewall + bracket/OCO sizing; writes pod/ledger/paper_blotter.jsonl"
+    },
+    {
+      "name": "Self-Training Quant Auditor",
+      "type": "deterministic",
+      "entrypoint": "python3 scripts/pod_engine.py grade",
+      "owner": "7ad52fe7-3d09-4438-bfa9-552a13aef8b6",
+      "mandate": "Grades elapsed signals (realized R, Brier) vs history/timeseries.jsonl; exponentially smooths per-regime weights in pod/scorecard.json"
+    }
+  ]
+}

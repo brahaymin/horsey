@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "method": "Per-regime weights start at 1.0 (uninformed prior). After each graded signal: w = 0.8*w + 0.2*skill, skill = clip(1 + 0.5*clip(R,-1,2) + (0.25 - brier), 0.25, 2.0). Effective weight = mean of active-regime weights, normalized across specialists.",
+  "active_regime_tags": [
+    "short_gamma_backwardation"
+  ],
+  "updated_ct": "2026-11-05T18:40:00-0600",
+  "agents": {
+    "05895e3e-1c82-4cec-9ff3-07aa73b5c0db": {
+      "name": "PTJ Macro & Regime Strategist",
+      "role": "specialist",
+      "signals_logged": 0,
+      "graded_count": 0,
+      "win_rate": null,
+      "avg_realized_r": null,
+      "brier_score": null,
+      "regime_weights": {
+        "short_gamma_backwardation": 1.0,
+        "positive_gamma_contango": 1.0,
+        "below_200sma": 1.0
+      },
+      "current_effective_weight": 0.3333
+    },
+    "ee33b632-6c42-4d43-bf17-665bc939db17": {
+      "name": "Intraday Tape & Gamma Tactician",
+      "role": "specialist",
+      "signals_logged": 0,
+      "graded_count": 0,
+      "win_rate": null,
+      "avg_realized_r": null,
+      "brier_score": null,
+      "regime_weights": {
+        "short_gamma_backwardation": 1.0,
+        "positive_gamma_contango": 1.0,
+        "below_200sma": 1.0
+      },
+      "current_effective_weight": 0.3333
+    },
+    "e44fa805-3796-4f84-8366-30901208f4ab": {
+      "name": "Buffett Value Compounder",
+      "role": "specialist",
+      "signals_logged": 0,
+      "graded_count": 0,
+      "win_rate": null,
+      "avg_realized_r": null,
+      "brier_score": null,
+      "regime_weights": {
+        "short_gamma_backwardation": 1.0,
+        "positive_gamma_contango": 1.0,
+        "below_200sma": 1.0
+      },
+      "current_effective_weight": 0.3333
+    }
+  }
+}
