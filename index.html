@@ -126,9 +126,11 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
 .bellbtn{position:relative;min-width:36px;min-height:36px;border-radius:999px;padding:6px 10px;font-size:14px}
 .bellbtn .bcnt{position:absolute;top:-4px;right:-4px;background:var(--neg);color:#fff;border-radius:999px;font-size:10px;font-weight:800;min-width:16px;height:16px;padding:0 4px;display:none;align-items:center;justify-content:center;line-height:1}
 .bellbtn.has .bcnt{display:inline-flex}
-.bellpop{display:none;position:absolute;right:0;top:calc(100% + 6px);width:min(92vw,360px);background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.45);z-index:70;padding:8px;max-height:70vh;overflow:auto}
-.bellwrap{position:relative}.bellpop.open{display:block}
-.bellpop h3{margin:4px 8px 8px;font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em}
+.bellpop{display:none;position:fixed;z-index:85;left:12px;top:56px;width:min(92vw,360px);background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.55);padding:8px;max-height:70vh;overflow:auto;box-sizing:border-box}
+.bellwrap{display:inline-flex;align-items:center}.bellpop.open{display:block}
+.bellpop .bh{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 4px}
+.bellpop h3{margin:4px 8px;font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;flex:1}
+.bellpop #bellClose{min-width:36px;min-height:36px;border-radius:999px;padding:6px 10px;font-size:14px;flex:0 0 auto}
 .bellpop .bi{padding:8px;border:1px solid var(--line);border-radius:10px;margin:6px 0;cursor:pointer;background:var(--panel2)}
 .bellpop .bi:hover{border-color:var(--acc)}.bellpop .bi .t{font-weight:700;font-size:13px}.bellpop .bi .s{color:var(--mut);font-size:12px;margin-top:2px}
 .bellpop .empty{color:var(--mut);padding:12px;text-align:center;font-size:13px}
@@ -143,10 +145,7 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
  <select id="snapSel" aria-label="Historical snapshot"></select>
  <button id="qbBrief" class="ceob">📋 CEO Briefing</button>
  <button class="src" id="srcBtn" title="Data source / live feed settings"><span class="dot" id="srcDot"></span><span id="srcLbl">Source: GitHub Archive</span> ⚙</button>
- <span class="bellwrap"><button class="bellbtn" id="bellBtn" title="Recent live updates" aria-label="Recent updates">🔔<span class="bcnt" id="bellCnt">0</span></button>
-  <div class="bellpop" id="bellPop" role="menu"><h3>Recent updates</h3><div id="bellList" class="empty">No updates yet — alerts appear when new snapshots, briefings, or tickets land.</div>
-   <div class="row" style="margin-top:8px;justify-content:space-between"><button type="button" id="bellTest" style="font-size:12px">🔔 Test Banner</button><button type="button" id="bellClear" style="font-size:12px">Clear</button></div>
-  </div></span>
+ <span class="bellwrap"><button class="bellbtn" id="bellBtn" title="Recent live updates" aria-label="Recent updates">🔔<span class="bcnt" id="bellCnt">0</span></button></span>
  <button type="button" class="lastpill" id="lastUpPill" title="Re-open last update">🔔 Last update</button>
  <span id="liveBadge" class="pill" style="display:none"></span>
  <span class="grow"></span>
@@ -287,6 +286,11 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
  </div>
 </section>
 </main>
+<div class="bellpop" id="bellPop" role="menu" aria-label="Recent updates">
+ <div class="bh"><h3>Recent updates</h3><button type="button" id="bellClose" aria-label="Close">✕</button></div>
+ <div id="bellList" class="empty">No updates yet — alerts appear when new snapshots, briefings, or tickets land.</div>
+ <div class="row" style="margin-top:8px;justify-content:space-between"><button type="button" id="bellTest" style="font-size:12px">🔔 Test Banner</button><button type="button" id="bellClear" style="font-size:12px">Clear</button></div>
+</div>
 <div id="liveToastHost" aria-live="polite" aria-relevant="additions"></div>
 <footer class="wrap">Zero trade ideas · Public Cboe &amp; Yahoo Finance feeds · All times Central Time (CT, America/Chicago)<br>Informational market-structure description only. GEX is a model proxy from open interest; zero-γ is a model estimate.</footer>
 
@@ -932,14 +936,42 @@ const LiveHub = (()=>{
     booted=true;
   }
 
+  function positionBellPop(){
+    const btn=$("bellBtn"), pop=$("bellPop");
+    if(!btn||!pop||!pop.classList.contains("open"))return;
+    const r=btn.getBoundingClientRect();
+    const vw=document.documentElement.clientWidth||window.innerWidth;
+    const vh=window.innerHeight;
+    if(vw<=620){
+      pop.style.left="10px"; pop.style.right="10px"; pop.style.width="auto";
+      pop.style.top=Math.max(8, Math.min(vh-180, Math.round(r.bottom+8)))+"px";
+      pop.style.maxHeight=Math.max(180, vh-Math.round(r.bottom+20))+"px";
+    }else{
+      const w=Math.min(360, vw-24);
+      const left=Math.max(12, Math.min(Math.round(r.left), vw-w-12));
+      pop.style.width=w+"px"; pop.style.left=left+"px"; pop.style.right="auto";
+      pop.style.top=Math.max(8, Math.round(r.bottom+8))+"px";
+      pop.style.maxHeight=Math.max(220, vh-Math.round(r.bottom+24))+"px";
+    }
+  }
+  function closeBellPop(){const pop=$("bellPop"); if(pop)pop.classList.remove("open")}
+  function openBellPop(forceOpen){
+    const pop=$("bellPop"); if(!pop)return;
+    const open=forceOpen===true?true:forceOpen===false?false:!pop.classList.contains("open");
+    pop.classList.toggle("open", open);
+    if(open){positionBellPop(); requestAnimationFrame(positionBellPop)}
+  }
   function bindUI(){
     const btn=$("bellBtn"), pop=$("bellPop");
     if(btn&&pop){
-      btn.onclick=e=>{e.stopPropagation();pop.classList.toggle("open")};
-      document.addEventListener("click",e=>{if(!pop.contains(e.target)&&e.target!==btn)pop.classList.remove("open")});
+      btn.onclick=e=>{e.stopPropagation(); openBellPop()};
+      document.addEventListener("click",e=>{if(!pop.contains(e.target)&&!btn.contains(e.target))closeBellPop()});
+      window.addEventListener("resize",()=>{if(pop.classList.contains("open"))positionBellPop()});
+      window.addEventListener("scroll",()=>{if(pop.classList.contains("open"))positionBellPop()},{passive:true,capture:true});
     }
-    if($("bellList"))$("bellList").onclick=e=>{const bi=e.target.closest(".bi");if(bi)reopen(+bi.dataset.i)};
-    if($("bellTest"))$("bellTest").onclick=()=>{testBanner(); if(pop)pop.classList.remove("open")};
+    if($("bellClose"))$("bellClose").onclick=e=>{e.stopPropagation(); closeBellPop()};
+    if($("bellList"))$("bellList").onclick=e=>{const bi=e.target.closest(".bi");if(bi){reopen(+bi.dataset.i); closeBellPop()}};
+    if($("bellTest"))$("bellTest").onclick=()=>{testBanner(); closeBellPop()};
     if($("bellClear"))$("bellClear").onclick=()=>{history=[];saveHist()};
     if($("lastUpPill"))$("lastUpPill").onclick=()=>reopen(0);
   }
@@ -953,7 +985,7 @@ const LiveHub = (()=>{
     setTimeout(()=>{baseline()}, 800);
   }
 
-  return {start, loadPrefs, testBanner, onNewSnapshot, showBanner, refreshChannels, baseline, get fp(){return fp}, get booted(){return booted}};
+  return {start, loadPrefs, testBanner, onNewSnapshot, showBanner, refreshChannels, baseline, positionBellPop, openBellPop, closeBellPop, get fp(){return fp}, get booted(){return booted}};
 })();
 window.LiveHub=LiveHub;
 LiveHub.start();
