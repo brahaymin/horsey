@@ -478,7 +478,13 @@ def _main_unlocked():
     compact_json["md_rel_path"] = f"snapshots/{yyyy}/{mm}/{date_str}/{hhmm}-ct-{run_tag}.md"
     compact_json["json_rel_path"] = f"snapshots/{yyyy}/{mm}/{date_str}/{hhmm}-ct-{run_tag}.json"
 
-    md_source = REPORT_MD if os.path.exists(REPORT_MD) else SUMMARY_MD
+    # Prefer monitor --summary output; fall back to legacy report path; if both exist use the newer mtime.
+    if os.path.exists(SUMMARY_MD) and os.path.exists(REPORT_MD):
+        md_source = SUMMARY_MD if os.path.getmtime(SUMMARY_MD) >= os.path.getmtime(REPORT_MD) else REPORT_MD
+    elif os.path.exists(SUMMARY_MD):
+        md_source = SUMMARY_MD
+    else:
+        md_source = REPORT_MD
     base_slug = f"{hhmm}-ct-{run_tag}"
     md_dest = os.path.join(snap_dir, f"{base_slug}.md")
     json_dest = os.path.join(snap_dir, f"{base_slug}.json")
