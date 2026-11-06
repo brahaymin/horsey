@@ -1,1080 +1,267 @@
 <!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>SPY Gamma Structure &amp; Regime Monitor</title>
-<meta name="description" content="Hourly archive of SPY gamma exposure, walls, VIX term structure and relative strength. Public data only; no trade ideas.">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
-<link rel="icon" href="data:,">
-<script src="js/feed-adapter.js"></script>
+<title>Horsey Command Desk — Secure Access</title>
+<meta name="robots" content="noindex,nofollow">
+<meta name="description" content="Private AES-256 vault login for the Horsey command desk.">
 <style>
-:root{--bg:#0a0e15;--panel:#111827;--panel2:#172033;--line:#233049;--txt:#e8edf7;--mut:#8b97b0;--pos:#22c55e;--neg:#f43f5e;--acc:#38bdf8;--warn:#f59e0b;--vio:#a78bfa;--gold:#facc15}
-*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;-webkit-text-size-adjust:100%}
-a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
-.wrap{max-width:1500px;margin:0 auto;padding:0 max(12px,env(safe-area-inset-left))}
-h2{font-size:13px;margin:0 0 10px;color:#cdd6ea;text-transform:uppercase;letter-spacing:.7px}
-.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.topbar{position:sticky;top:0;z-index:30;background:rgba(10,14,21,.95);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
-.topbar .wrap{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding-top:8px;padding-bottom:8px}
-.brand{font-weight:800;font-size:15px;white-space:nowrap}.brand small{display:block;font-weight:500;color:var(--mut);font-size:11.5px}
-.grow{flex:1 1 auto}
-select,button{font:inherit;font-size:13px;color:var(--txt);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer}
-select{max-width:min(100%,340px)}button.on{background:#0c4a6e;border-color:var(--acc)}
-.qb a,.qb button{font-size:12.5px;padding:5px 9px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--txt);white-space:nowrap}
-.src{display:inline-flex;align-items:center;gap:6px;font-size:12px;border:1px solid var(--line);border-radius:999px;padding:4px 10px;background:var(--panel)}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--mut)}.dot.ok{background:var(--acc)}.dot.live{background:var(--pos);box-shadow:0 0 8px var(--pos)}.dot.error,.dot.disconnected{background:var(--neg)}
-.pill{padding:3px 9px;border-radius:999px;font-size:11.5px;font-weight:700;border:1px solid var(--line);background:var(--panel2);white-space:nowrap;display:inline-block}
-.pill.neg{color:#fecdd3;border-color:#7f1d1d;background:#3b0d16}.pill.pos{color:#bbf7d0;border-color:#14532d;background:#0b2a17}.pill.warn{color:#fde68a;border-color:#78350f;background:#2d1d06}
-.neg{color:var(--neg)}.pos{color:var(--pos)}.mut{color:var(--mut)}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;min-width:0}
-.hero{display:grid;gap:12px;grid-template-columns:repeat(4,minmax(0,1fr));margin-top:12px}
-@media(max-width:1180px){.hero{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:620px){.hero{grid-template-columns:1fr}}
-.hc{border-top:3px solid var(--acc)}.hc.neg{border-top-color:var(--neg);color:inherit}.hc.pos{border-top-color:var(--pos);color:inherit}.hc.warn{border-top-color:var(--warn)}
-.hc .t{display:flex;justify-content:space-between;gap:6px;align-items:center;color:var(--mut);font-size:11.5px;text-transform:uppercase;letter-spacing:.6px;font-weight:700}
-.hc .big{font-size:clamp(26px,3vw,34px);font-weight:800;margin:6px 0 2px;font-variant-numeric:tabular-nums;letter-spacing:-.5px}
-.hc .chg{font-size:14px;font-weight:700}
-.kv{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;margin-top:10px;font-size:12.8px;font-variant-numeric:tabular-nums}.kv dt{color:var(--mut)}.kv dd{margin:0;text-align:right;font-weight:600}
-.ruler{margin-top:12px}.track{position:relative;height:150px;margin:0 6px}
-.bar{position:absolute;left:0;right:0;top:72px;height:6px;border-radius:3px;background:linear-gradient(90deg,#3b0d16,#1f2937 50%,#0b2a17)}
-.zone{position:absolute;top:70px;height:10px;background:rgba(244,63,94,.18);border-radius:3px}
-.mk{position:absolute;top:60px;width:2px;height:30px;transform:translateX(-1px)}
-.lb{position:absolute;transform:translateX(-50%);font-size:11px;font-weight:700;white-space:nowrap;text-align:center;line-height:1.15}
-.lb small{display:block;font-weight:600;opacity:.85}
-.spotmk{position:absolute;top:56px;width:14px;height:38px;transform:translateX(-7px);border-radius:4px;background:var(--acc);box-shadow:0 0 10px var(--acc);transition:left .4s}
-.tabs{position:sticky;z-index:25;background:rgba(10,14,21,.95);backdrop-filter:blur(8px);margin:14px 0 0;padding:8px 0;border-bottom:1px solid var(--line);display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
-.tabs button{white-space:nowrap;font-weight:600;border-radius:999px}.tabs .sp{flex:1}
-.panel{display:none;margin-top:12px}.panel.show{display:block}
-.panel>.phead{display:none;font-size:15px;font-weight:800;margin:18px 0 8px;color:var(--acc)}body.all .panel>.phead{display:block}
-.grid{display:grid;gap:12px}.two{grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr))}
-.chartbox{position:relative;height:clamp(280px,44vh,460px);width:100%}.chartbox.sm{height:clamp(220px,30vh,300px)}
-.tbl{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
-table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:13px}
-th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}th:first-child,td:first-child{text-align:left}
-th{color:var(--mut);font-weight:600;font-size:11.5px;text-transform:uppercase}th.sort{cursor:pointer}th.sort:hover{color:var(--txt)}tr.hl td{background:#16233a}
-.note{color:var(--mut);font-size:12px;margin-top:8px}
-.hd{list-style:none;padding:0;margin:0;display:grid;gap:10px}.hd li{padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)}.hd .meta{color:var(--mut);font-size:12px;margin-top:2px}
-.md{overflow-x:auto;font-size:14px}.md table{font-size:12.5px;margin:8px 0}.md td,.md th{white-space:normal;text-align:left;vertical-align:top}.md pre{white-space:pre-wrap;background:#0b1220;padding:10px;border-radius:8px}
-.md h1{font-size:22px}.md h2{font-size:18px;text-transform:none;letter-spacing:0;color:var(--acc);margin-top:22px}.md h3{font-size:16px;margin-top:18px}.md blockquote{border-left:3px solid var(--line);margin:8px 0;padding:2px 12px;color:var(--mut)}
-.md p.mistake{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
-.pbtools{position:sticky;top:0;background:var(--panel);padding:8px 0;z-index:2}
-input[type=search],input[type=text],input[type=url],input[type=number]{font:inherit;font-size:13px;color:var(--txt);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;min-width:0}
-.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;z-index:60;align-items:center;justify-content:center;padding:12px}.modal.open{display:flex}
-.modal .inner{width:min(100%,640px);max-height:90vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
-.modal label{display:block;margin:10px 0 4px;color:var(--mut);font-size:12px;text-transform:uppercase}.modal input{width:100%}
-.opt{display:flex;gap:8px;align-items:flex-start;padding:8px;border:1px solid var(--line);border-radius:8px;margin-top:6px;cursor:pointer}.opt input{width:auto;margin-top:3px}
-code{background:#0b1220;padding:1px 5px;border-radius:4px;font-size:12px}
-.err{background:#3b0d16;border:1px solid #7f1d1d;padding:10px;border-radius:8px;display:none;margin-top:10px}
-footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
-.flash{animation:fl 1s}@keyframes fl{from{background:#0c4a6e}to{background:transparent}}
-</style><style>
-.podban{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;text-align:center}
-.podban .nd{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:12.5px;font-weight:700}
-.podban .nd small{display:block;font-weight:400;color:var(--mut);font-size:11px}.podban .ar{color:var(--acc);font-weight:800}
-.podban .grp{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;border:1px dashed var(--line);border-radius:12px;padding:6px}
-.stc h3{margin:0 0 4px;font-size:15px}.stc .stance{font-weight:800;color:var(--warn);font-size:12.5px;margin-bottom:6px}.stc ul{margin:6px 0 0 18px;padding:0;font-size:13px}.stc li{margin:3px 0}
-.calc{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}.calc label{font-size:11px;color:var(--mut);text-transform:uppercase;display:block}.calc input,.calc select{width:100%;box-sizing:border-box}
-.fw li{list-style:none;margin:3px 0}.fw{padding:0;margin:6px 0}.verdict{font-weight:800;font-size:15px}
-</style>
-<style>
-.ceob{background:linear-gradient(135deg,#f59e0b,#10b981);color:#06110c;font-weight:800;border:0;border-radius:999px;padding:6px 12px;white-space:nowrap}
-.brw{display:grid;grid-template-columns:300px minmax(0,1fr);gap:12px;align-items:start}
-@media(max-width:900px){.brw{grid-template-columns:1fr}}
-.brside{position:sticky;top:64px}@media(max-width:900px){.brside{position:static}}
-.pills{display:flex;flex-direction:column;gap:6px}@media(max-width:900px){.pills{flex-direction:row;flex-wrap:wrap}}
-.pills button{display:flex;justify-content:space-between;align-items:center;gap:8px;text-align:left;border-radius:10px;font-weight:600}
-.pills button.on{border-color:#10b981;background:#0b2a22}.pills .ct{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:0 7px;font-size:11px}
-.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));gap:10px;margin-bottom:12px}
-.strip .card{padding:10px 12px}.strip .lab{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}.strip .sv{font-weight:800;margin:4px 0 6px;font-size:13.5px}
-.strip .cio{border-top:3px solid #f59e0b}.strip .ptj{border-top:3px solid var(--acc)}.strip .intraday{border-top:3px solid var(--neg)}.strip .buffett{border-top:3px solid #10b981}
-.reader .md{font-size:14.5px;line-height:1.6}.reader .md h1{font-size:23px;margin:4px 0 10px;line-height:1.25}.reader .md table{display:block;overflow-x:auto;max-width:100%}
-.reader .md th{background:var(--panel2)}.reader .md td,.reader .md th{border:1px solid var(--line);padding:6px 8px}.reader .md code{background:#0b1220;padding:1px 5px;border-radius:4px;font-size:.92em}
-.reader .md hr{border:0;border-top:1px solid var(--line);margin:16px 0}.reader .md blockquote{background:var(--panel2);margin:8px 0;padding:6px 12px;border-left:3px solid #f59e0b}
-.rdhead{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:8px;border-bottom:1px solid var(--line);padding-bottom:8px}
-</style>
-<style>
-.ceoq{border:1px solid #f59e0b;box-shadow:0 0 0 1px rgba(245,158,11,.15);margin-bottom:12px}
-.ceoq h2{margin:0;font-size:17px}.qq{margin:12px 0;padding:10px 0;border-top:1px solid var(--line)}.qq .qt{font-weight:800}.qq .qd{color:var(--mut);font-size:12.5px;margin:2px 0 8px}
-.opts{display:flex;flex-wrap:wrap;gap:6px}.opts button{border-radius:999px;font-size:12.5px;text-align:left;white-space:normal}.opts button.on{background:#0b2a22;border-color:#10b981;color:#d1fae5}
-.opts button.on::before{content:"✓ "}.ceoq textarea{width:100%;box-sizing:border-box;min-height:70px;background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}
-.qbadge{background:#f59e0b;color:#111;border-radius:999px;padding:0 7px;font-size:11px;font-weight:800;margin-left:4px}
-.qok{color:var(--pos);font-weight:700}.qwarn{color:var(--warn);font-weight:700}.syncbox{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:8px}
-.syncbox input{width:100%;box-sizing:border-box}.syncbox ul{margin:6px 0 8px 18px;padding:0;font-size:12.5px}
-</style>
-
-<style>
-/* ---- Live update toast banners + bell tray ---- */
-#liveToastHost{position:fixed;top:max(10px,env(safe-area-inset-top,10px));left:50%;transform:translateX(-50%);z-index:80;width:calc(100vw - 20px);max-width:640px;display:flex;flex-direction:column;gap:8px;pointer-events:none}
-.live-banner{pointer-events:auto;background:linear-gradient(180deg,#1a2740 0%,#111827 100%);border:1px solid var(--acc);border-radius:14px;box-shadow:0 14px 42px rgba(0,0,0,.55),0 0 0 1px rgba(56,189,248,.18);padding:12px 14px 8px;animation:liveIn .32s ease;overflow:hidden;position:relative}
-.live-banner.kind-market{border-color:var(--acc)}.live-banner.kind-cio{border-color:#f59e0b}.live-banner.kind-pod{border-color:var(--vio)}.live-banner.kind-ceo{border-color:#10b981}.live-banner.kind-test{border-color:var(--warn)}
-@keyframes liveIn{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}
-.live-banner .lb-top{display:flex;gap:10px;align-items:flex-start}
-.live-banner .lb-ico{font-size:20px;line-height:1;flex:0 0 auto;margin-top:2px}
-.live-banner .lb-body{flex:1;min-width:0}
-.live-banner .lb-badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--acc);margin-bottom:2px}
-.live-banner.kind-cio .lb-badge{color:#fbbf24}.live-banner.kind-pod .lb-badge{color:#c4b5fd}.live-banner.kind-ceo .lb-badge{color:#6ee7b7}
-.live-banner .lb-badge .pulse{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 0 0 currentColor;animation:pulse 1.4s infinite}
-@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(56,189,248,.55)}70%{box-shadow:0 0 0 8px rgba(56,189,248,0)}100%{box-shadow:0 0 0 0 rgba(56,189,248,0)}}
-.live-banner .lb-title{font-weight:800;font-size:15px;line-height:1.25;margin:0 0 3px}
-.live-banner .lb-sum{color:var(--mut);font-size:12.8px;line-height:1.35;font-variant-numeric:tabular-nums}
-.live-banner .lb-time{color:var(--mut);font-size:11.5px;margin-top:4px}
-.live-banner .lb-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center}
-.live-banner .lb-actions button{min-height:36px;padding:7px 12px;border-radius:999px;font-weight:700;font-size:12.5px}
-.live-banner .lb-actions .primary{background:#0c4a6e;border-color:var(--acc);color:#e0f2fe}
-.live-banner .lb-x{min-width:36px;min-height:36px;border-radius:999px;flex:0 0 auto}
-.live-banner .lb-bar{position:absolute;left:0;right:0;bottom:0;height:3px;background:rgba(56,189,248,.15)}
-.live-banner .lb-bar>i{display:block;height:100%;width:100%;background:var(--acc);transform-origin:left center;animation:none}
-.bellbtn{position:relative;min-width:36px;min-height:36px;border-radius:999px;padding:6px 10px;font-size:14px}
-.bellbtn .bcnt{position:absolute;top:-4px;right:-4px;background:var(--neg);color:#fff;border-radius:999px;font-size:10px;font-weight:800;min-width:16px;height:16px;padding:0 4px;display:none;align-items:center;justify-content:center;line-height:1}
-.bellbtn.has .bcnt{display:inline-flex}
-.bellpop{display:none;position:fixed;z-index:85;left:12px;top:56px;width:min(92vw,360px);background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.55);padding:8px;max-height:70vh;overflow:auto;box-sizing:border-box}
-.bellwrap{display:inline-flex;align-items:center}.bellpop.open{display:block}
-.bellpop .bh{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 4px}
-.bellpop h3{margin:4px 8px;font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;flex:1}
-.bellpop #bellClose{min-width:36px;min-height:36px;border-radius:999px;padding:6px 10px;font-size:14px;flex:0 0 auto}
-.bellpop .bi{padding:8px;border:1px solid var(--line);border-radius:10px;margin:6px 0;cursor:pointer;background:var(--panel2)}
-.bellpop .bi:hover{border-color:var(--acc)}.bellpop .bi .t{font-weight:700;font-size:13px}.bellpop .bi .s{color:var(--mut);font-size:12px;margin-top:2px}
-.bellpop .empty{color:var(--mut);padding:12px;text-align:center;font-size:13px}
-.lastpill{font-size:11.5px;padding:4px 9px;border-radius:999px;border:1px solid var(--line);background:var(--panel2);color:var(--mut);cursor:pointer;display:none}
-.lastpill.show{display:inline-flex;align-items:center;gap:5px}
-.lastpill b{color:var(--txt);font-weight:700}
-@media(max-width:620px){.live-banner .lb-title{font-size:14.5px}.src #srcLbl{max-width:42vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:bottom}}
+:root{--bg:#070a10;--card:#0f1520;--line:#243049;--txt:#e8edf7;--mut:#8b97b0;--acc:#38bdf8;--neg:#f43f5e;--pos:#22c55e;--warn:#f59e0b}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--txt);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif}
+.wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:max(16px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom))}
+.card{width:min(100%,420px);background:linear-gradient(180deg,#121a28,#0f1520);border:1px solid var(--line);border-radius:16px;padding:22px 20px 18px;box-shadow:0 18px 50px rgba(0,0,0,.45)}
+.brand{font-weight:800;font-size:18px;letter-spacing:-.02em}.brand small{display:block;font-weight:500;color:var(--mut);font-size:12.5px;margin-top:4px}
+.lockico{font-size:28px;margin-bottom:8px}
+label{display:block;margin:14px 0 6px;color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.05em;font-weight:700}
+.row{display:flex;gap:8px;align-items:center}
+input[type=password],input[type=text]{width:100%;font:inherit;color:var(--txt);background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:12px 12px;min-height:44px}
+input:focus{outline:2px solid rgba(56,189,248,.35);border-color:var(--acc)}
+button{font:inherit;font-weight:700;border-radius:10px;border:1px solid var(--line);background:#172033;color:var(--txt);padding:11px 14px;cursor:pointer;min-height:44px}
+button.primary{flex:1;background:#0c4a6e;border-color:var(--acc);color:#e0f2fe}
+button.ghost{background:transparent}
+.err{display:none;margin-top:12px;padding:10px 12px;border-radius:10px;background:#3b0d16;border:1px solid #7f1d1d;color:#fecdd3;font-size:13.5px}
+.err.show{display:block}
+.hint{color:var(--mut);font-size:12.5px;margin-top:12px;line-height:1.4}
+.check{display:flex;gap:8px;align-items:center;margin:12px 0 4px;color:var(--mut);font-size:13.5px}
+.check input{width:18px;height:18px}
+.visually-hidden{position:absolute!important;height:1px;width:1px;overflow:hidden;clip:rect(1px,1px,1px,1px);white-space:nowrap}
+.busy button.primary{opacity:.7;pointer-events:none}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;margin-right:8px;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
 </style>
 </head><body>
-<div class="topbar"><div class="wrap">
- <div class="brand">SPY Gamma Structure &amp; Regime Monitor<small id="asof">Loading…</small></div>
- <select id="snapSel" aria-label="Historical snapshot"></select>
- <button id="qbBrief" class="ceob">📋 CEO Briefing</button>
- <button class="src" id="srcBtn" title="Data source / live feed settings"><span class="dot" id="srcDot"></span><span id="srcLbl">Source: GitHub Archive</span> ⚙</button>
- <span class="bellwrap"><button class="bellbtn" id="bellBtn" title="Recent live updates" aria-label="Recent updates">🔔<span class="bcnt" id="bellCnt">0</span></button></span>
- <button type="button" class="lastpill" id="lastUpPill" title="Re-open last update">🔔 Last update</button>
- <span id="liveBadge" class="pill" style="display:none"></span>
- <span class="grow"></span>
- <div class="row qb">
-  <button id="qbPlay">📘 Playbook (5 Traders &amp; 50 Mistakes)</button>
-  <a id="lnkMd" target="_blank" rel="noopener">Snapshot .md</a>
-  <a id="lnkJson" target="_blank" rel="noopener">JSON</a>
-  <a href="history/timeseries.csv" target="_blank" rel="noopener">CSV</a>
-  <a href="https://github.com/brahaymin/horsey" target="_blank" rel="noopener">GitHub</a>
- </div>
-</div></div>
-<main class="wrap">
-<div class="err" id="err"></div>
-<div class="note" id="podPrivateNote" style="display:none;margin-top:10px;padding:10px;border:1px dashed var(--warn);border-radius:10px;background:#2d1d06;color:#fde68a"></div>
-
-<!-- TIER 1: 3-second regime strip -->
-<section class="hero" id="hero">
- <div class="card hc" id="h1"><div class="t">SPY · Trend Defense (200 SMA)<span id="h1p"></span></div><div class="big" id="h1v">—</div><div class="chg" id="h1c"></div><dl class="kv" id="h1k"></dl></div>
- <div class="card hc" id="h2"><div class="t">Dealer Gamma Regime &amp; Flip<span id="h2p"></span></div><div class="big" id="h2v">—</div><div class="chg" id="h2c"></div><dl class="kv" id="h2k"></dl></div>
- <div class="card hc" id="h3"><div class="t">Battleground Walls &amp; $735 Node</div><div class="big" id="h3v">—</div><div class="chg" id="h3c"></div><dl class="kv" id="h3k"></dl></div>
- <div class="card hc" id="h4"><div class="t">Volatility &amp; Cross-Asset Pulse<span id="h4p"></span></div><div class="big" id="h4v">—</div><div class="chg" id="h4c"></div><dl class="kv" id="h4k"></dl></div>
-</section>
-<section class="card ruler"><div class="row" style="justify-content:space-between"><h2 style="margin:0">SPY Structural Level Map</h2><span class="note" style="margin:0" id="rulerNote"></span></div><div class="track" id="track"></div></section>
-
-<!-- TIER 2: workspace tabs -->
-<nav class="tabs" id="tabs" role="tablist">
- <button data-tab="briefings" class="on">1. Briefings &amp; Team Memos</button>
- <button data-tab="gamma">2. Gamma &amp; Walls</button>
- <button data-tab="px">3. Price, Volume &amp; VIX</button>
- <button data-tab="rs">4. AI vs. Banks, Futures &amp; News</button>
- <button data-tab="pod">5. Pod Desk &amp; Risk Sizer</button>
- <button data-tab="play">6. Trader Playbook (5 Legends + 50 Mistakes)</button>
- <span class="sp"></span>
- <button data-tab="all">▦ All Panels</button>
-</nav>
-
-<section class="panel show" id="p-briefings"><div class="phead">1 · Briefings &amp; Team Memos</div>
- <div class="strip" id="brStrip"></div>
- <div class="card ceoq" id="ceoQ">
-  <div class="row" style="justify-content:space-between"><h2>🗳️ CEO Decisions &amp; Standing Directives <span id="ceoQStatus" class="pill"></span></h2><button id="ceoSyncBtn">⚙️ Sync Setup</button></div>
-  <div class="note" id="ceoQMeta" style="margin:4px 0 0"></div>
-  <div id="ceoQList"></div>
-  <label for="ceoNote" class="note" style="text-transform:uppercase;display:block;margin:4px 0">Ask the CIO / Add Standing CEO Note or Override…</label>
-  <textarea id="ceoNote" placeholder="e.g. Approve A only if NQ confirms. Question: what invalidates Scenario C?"></textarea>
-  <div class="row" style="margin-top:8px;gap:8px"><button id="ceoSave" class="ceob">💾 Save &amp; Push to Pod</button><span id="ceoMsg" class="note" style="margin:0"></span></div>
-  <div id="ceoAlt" class="row" style="gap:8px;margin-top:8px;display:none"><button id="ceoCopy">📋 Copy &amp; Open CIO in Grok Bot</button><button id="ceoConnect">🔗 Connect 1-Click Direct Sync (Free GitHub Token)</button></div>
-  <div id="ceoSync" class="syncbox" style="display:none"><b>1-Click Direct Sync (optional)</b>
-   <ul><li>GitHub → Settings → Developer settings → <b>Fine-grained tokens</b> → Generate new token.</li>
-   <li>Repository access: <b>Only select repositories → brahaymin/horsey</b>. Permissions: <b>Contents: Read and write</b> (nothing else).</li>
-   <li>Paste it below. It is stored <b>only in this browser's localStorage</b> — never in the repo. Repeat once per device.</li></ul>
-   <input type="password" id="ceoPat" placeholder="github_pat_…" autocomplete="off"><div class="row" style="gap:8px;margin-top:6px"><button id="ceoPatSave">Save token</button><button id="ceoPatClear">Remove token</button><span id="ceoPatMsg" class="note" style="margin:0"></span></div></div>
- </div>
-
- <div class="brw">
-  <div class="card brside">
-   <div class="note" style="margin:0 0 6px;text-transform:uppercase">Author / Desk</div>
-   <div class="pills" id="brPills"></div>
-   <div class="note" style="margin:12px 0 4px;text-transform:uppercase">Run / Date history</div>
-   <select id="brRun" style="width:100%"></select>
-   <div class="note" id="brIdxNote" style="margin-top:8px"></div>
+<div class="wrap" id="gateWrap">
+ <form class="card" id="vaultForm" method="post" action="#" autocomplete="on">
+  <div class="lockico" aria-hidden="true">🔒</div>
+  <div class="brand">Horsey Command Desk<small>AES-256 private vault · paper trading architecture</small></div>
+  <!-- Username field so password managers save/autofill cleanly -->
+  <label class="visually-hidden" for="vaultUser">Username</label>
+  <input class="visually-hidden" type="text" id="vaultUser" name="username" value="horsey-ceo" autocomplete="username" tabindex="-1" aria-hidden="true">
+  <label for="vaultPass">CEO password</label>
+  <div class="row">
+   <input type="password" id="vaultPass" name="password" autocomplete="current-password" placeholder="Enter CEO password" required minlength="1">
+   <button type="button" class="ghost" id="togglePass" aria-label="Show password">Show</button>
   </div>
-  <div class="card reader">
-   <div class="rdhead"><div><div style="font-weight:800" id="brTitle">Loading…</div><div class="note" style="margin:2px 0 0" id="brMeta"></div></div>
-    <div class="row"><button id="brFmt" class="on">Formatted View</button><button id="brRaw">Raw .md</button><button id="brCopy">📋 Copy</button></div></div>
-   <div class="md" id="brBody">Loading briefing…</div>
+  <label class="check"><input type="checkbox" id="rememberDevice" checked> Remember on this device</label>
+  <div class="row" style="margin-top:14px">
+   <button type="submit" class="primary" id="unlockBtn">Unlock Command Desk</button>
   </div>
- </div>
-</section>
-<section class="panel" id="p-gamma"><div class="phead">2 · Gamma &amp; Walls</div>
- <div class="card"><h2>Strike-by-Strike GEX Profile ($700–$810)</h2>
-  <div class="row" id="scopeBtns"></div><div class="row" style="margin-top:6px" id="modeBtns"></div>
-  <div class="chartbox" style="margin-top:10px"><canvas id="gexChart"></canvas></div><div class="note" id="gexNote"></div></div>
- <div class="grid two" style="margin-top:12px">
-  <div class="card"><h2>4-Scope GEX Summary</h2><div class="tbl"><table id="scopeTbl"></table></div></div>
-  <div class="card"><h2>$735 Strike Node · Multi-Scope</h2><div class="tbl"><table id="nodeTbl"></table></div><div class="note">GEX in $M per 1% underlying move. OI-side proxy (long call / short put dealer convention), not observed dealer inventory.</div></div>
- </div>
-</section>
-
-<section class="panel" id="p-px"><div class="phead">3 · Price, Volume &amp; VIX</div>
- <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,520px),1fr))">
-  <div class="card"><h2>SPY Price, 200 SMA, $735 Node &amp; Volume</h2><div class="row" id="pxBtns"></div>
-   <div class="chartbox" style="margin-top:10px"><canvas id="pxChart"></canvas></div><div class="note" id="pxNote"></div>
-   <div class="tbl" id="logTblWrap" style="display:none;margin-top:10px"><table id="logTbl"></table></div></div>
-  <div class="card"><h2>VIX Implied-Volatility Term Structure</h2><div class="chartbox sm"><canvas id="vixChart"></canvas></div><div class="tbl"><table id="vixTbl"></table></div><div class="note" id="vixNote"></div></div>
- </div>
-</section>
-
-<section class="panel" id="p-rs"><div class="phead">4 · AI vs. Banks &amp; Futures</div>
- <div class="card"><h2>AI Complex, Data-Center &amp; KBW Bank Relative Strength</h2><div class="row" id="rsBtns"></div>
-  <div class="grid two" style="margin-top:10px;align-items:start">
-   <div class="chartbox" style="height:clamp(380px,52vh,540px)"><canvas id="rsChart"></canvas></div>
-   <div class="tbl"><table id="rsTbl"></table><div class="note">Click any column header to sort.</div></div>
-  </div></div>
- <div class="card" style="margin-top:12px"><h2>Globex Futures (/ES, /NQ, /RTY)</h2><div class="tbl"><table id="futTbl"></table></div><div class="note">Yahoo Finance delayed quotes; displayed change/reference is not certified exchange settlement.</div></div>
-</section>
-
-<section class="panel" id="p-news"><div class="phead">4b · Verified Headlines &amp; Raw Snapshot .md</div>
- <div class="card"><h2>Verified Data-Center / AI Policy Headlines</h2><ul class="hd" id="news"></ul></div>
- <div class="card" style="margin-top:12px"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Snapshot Markdown Report</h2>
-  <div class="row"><button id="mdView">Formatted</button><button id="mdRaw">Raw</button><button id="mdCopy">📋 Copy .md</button><a id="lnkMd2" target="_blank" rel="noopener">Open .md ↗</a></div></div>
-  <div id="md" class="md" style="margin-top:10px">Loading…</div></div>
-</section>
-
-<section class="panel" id="p-play">
- <div class="card"><div class="pbtools"><div class="row">
-  <button data-jump="part-i-the-top-5-greatest-short-term-traders--their-verified-methodologies">Top 5 Methodologies</button>
-  <button data-jump="comparative-matrix">Comparison Matrix</button>
-  <button data-jump="part-ii-the-top-50-worst-mistakes-day-traders-make">Mistakes #1–50</button>
-  <button data-jump="part-iii-how-these-principles-govern-the-reorganized-spy-gamma-dashboard">Dashboard Mapping</button>
-  <input type="search" id="pbq" placeholder="Filter mistakes (e.g. gamma, stop, VIX)…" style="flex:1 1 200px">
-  <select id="pbcat"><option value="">All categories</option></select>
-  <a href="https://github.com/brahaymin/horsey/blob/main/docs/day_trading_methodologies_and_50_mistakes.md" target="_blank" rel="noopener">Raw .md on GitHub ↗</a>
- </div><div class="note" id="pbcount" style="margin:4px 0 0"></div></div>
- <div id="pb" class="md">Loading playbook…</div></div>
-</section>
-<section class="panel" id="p-pod"><div class="phead">5 · Pod Desk &amp; Risk Sizer <span class="note">(Paper / Architecture Demo — Not Live Financial Advice)</span></div>
- <div class="card"><div class="podban" id="podBanner"></div>
-  <div class="note" style="text-align:center;margin-top:6px"><a href="https://github.com/brahaymin/horsey/blob/main/docs/agent_pod_architecture.md" target="_blank" rel="noopener">📘 CEO Architecture Manual (docs/agent_pod_architecture.md) ↗</a> · <span id="podAsOf"></span></div></div>
- <div class="card" id="podCio" style="margin-top:12px"></div>
- <div class="grid two" id="podCards" style="margin-top:12px"></div>
- <div class="card" style="margin-top:12px"><h2 style="margin:0 0 8px">Pre-Trade Risk &amp; Order Ticket Calculator <span class="note">mirrors scripts/pod_engine.py size-ticket</span></h2>
-  <div class="calc">
-   <div><label>Account equity $</label><input type="number" id="cEq" value="50000"></div>
-   <div><label>Risk % (cap 1.0)</label><input type="number" id="cRisk" value="0.5" step="0.05"></div>
-   <div><label>Instrument</label><select id="cIns"><option value="stock">Stock / ETF</option><option value="option_call">Option call (premium)</option><option value="option_put" selected>Option put (premium)</option></select></div>
-   <div><label>Direction</label><select id="cDir"><option>long</option><option>short</option></select></div>
-   <div><label>Strategy agent</label><select id="cAg"><option value="tape">Intraday Tape &amp; Gamma (3R)</option><option value="ptj">PTJ Macro (5R)</option><option value="buf">Buffett Value (3R)</option></select></div>
-   <div><label>Entry (price or premium)</label><input type="number" id="cEn" value="1.85" step="0.01"></div>
-   <div><label>Hard stop</label><input type="number" id="cSt" value="1.25" step="0.01"></div>
-   <div><label>Target 1 (blank = 3R)</label><input type="number" id="cT1" step="0.01"></div>
-   <div><label>Target 2 (blank = 5R)</label><input type="number" id="cT2" step="0.01"></div>
-   <div><label>SPY ref (no-man's-land)</label><input type="number" id="cRef" step="0.01"></div>
-   <div><label>Time stop</label><input type="text" id="cTs" value="45m if no follow-through"></div>
-   <div><label>VIX (auto) / drawdown</label><div class="row"><input type="number" id="cVix" step="0.01" style="flex:1"><label style="text-transform:none"><input type="checkbox" id="cDd"> DD</label></div></div>
-  </div><div id="cOut" style="margin-top:10px"></div></div>
- <div class="card" id="alpacaDesk" style="margin-top:12px;border-color:#10b981">
-  <div class="row" style="justify-content:space-between;gap:8px;flex-wrap:wrap">
-   <h2 style="margin:0">🏦 Alpaca Paper Broker Desk <span class="note">paper-api.alpaca.markets — Paper Only</span></h2>
-   <span class="pill" id="alpacaBadge">Awaiting Paper API Keys</span>
-  </div>
-  <div class="note" id="alpacaDeskNote" style="margin-top:6px">Synced from <code>pod/paper_account_state.json</code> (written by <code>pod_engine.py alpaca-status</code>). Browser may also refresh live if Paper keys are saved in Data Source.</div>
-  <div class="row" id="alpacaMetrics" style="gap:8px;margin-top:8px;flex-wrap:wrap"></div>
-  <div class="grid two" style="margin-top:10px">
-   <div><h2 style="margin:0 0 6px;font-size:12px">Open Paper Positions</h2><div class="tw"><table id="alpacaPos"><tr><td class="mut">No positions synced.</td></tr></table></div></div>
-   <div><h2 style="margin:0 0 6px;font-size:12px">Recent / Working Paper Orders</h2><div class="tw"><table id="alpacaOrd"><tr><td class="mut">No orders synced.</td></tr></table></div></div>
-  </div>
-  <div style="margin-top:10px"><h2 style="margin:0 0 6px;font-size:12px">Validated Alpaca Paper Payload Preview</h2><pre id="alpacaPreview" class="note" style="white-space:pre-wrap;background:#0b1220;padding:10px;border-radius:8px;max-height:220px;overflow:auto">Run locally: python3 scripts/pod_engine.py alpaca-stage-ticket --ticket-id TKT-ITT-2026-11-06-A --dry-run</pre></div>
- </div>
- <div class="grid two" style="margin-top:12px">
-  <div class="card"><h2 style="margin:0 0 8px">Self-Training Calibration Scorecard</h2><div class="tw"><table id="podScore"></table></div><div class="note" id="podScoreNote"></div></div>
-  <div class="card"><h2 style="margin:0 0 8px">Paper Blotter</h2><div class="tw"><table id="podBlot"></table></div></div>
- </div>
-</section>
-</main>
-<div class="bellpop" id="bellPop" role="menu" aria-label="Recent updates">
- <div class="bh"><h3>Recent updates</h3><button type="button" id="bellClose" aria-label="Close">✕</button></div>
- <div id="bellList" class="empty">No updates yet — alerts appear when new snapshots, briefings, or tickets land.</div>
- <div class="row" style="margin-top:8px;justify-content:space-between"><button type="button" id="bellTest" style="font-size:12px">🔔 Test Banner</button><button type="button" id="bellClear" style="font-size:12px">Clear</button></div>
+  <div class="err" id="vaultErr" role="alert"></div>
+  <p class="hint">Session unlocks in-browser with PBKDF2 + AES-256-GCM. Wrong password never reaches a server. Live market polls refresh the encrypted state file only.</p>
+ </form>
 </div>
-<div id="liveToastHost" aria-live="polite" aria-relevant="additions"></div>
-<footer class="wrap">Zero trade ideas · Public Cboe &amp; Yahoo Finance feeds · All times Central Time (CT, America/Chicago)<br>Informational market-structure description only. GEX is a model proxy from open interest; zero-γ is a model estimate.</footer>
-
-<div class="modal" id="feedModal" role="dialog" aria-modal="true"><div class="inner">
- <div class="row" style="justify-content:space-between"><h2 style="margin:0">Data Source / Live Feed</h2><button id="fmClose">✕</button></div>
- <p class="note">The dashboard renders from the pluggable <code>window.SPYGammaFeed</code> adapter (<a href="js/feed-adapter.js" target="_blank">js/feed-adapter.js</a>, <a href="docs/live_feed_spec.md" target="_blank">spec</a>). Settings are saved in this browser only.</p>
- <label class="opt"><input type="radio" name="fm" value="github_archive"><span><b>Archive JSON</b> (GitHub)<br><span class="note">snapshots/index.json + snapshot JSON + history/timeseries.jsonl</span></span></label>
- <label class="opt"><input type="radio" name="fm" value="rest"><span><b>Custom REST Poll URL</b><br><span class="note">Full snapshot JSON (latest.json schema) or a tick object</span></span></label>
- <label class="opt"><input type="radio" name="fm" value="websocket"><span><b>Live WebSocket URL</b><br><span class="note">wss:// stream of ticks or {type:"snapshot",data}</span></span></label>
- <label class="opt"><input type="radio" name="fm" value="alpaca_iex"><span><b>Alpaca Paper Live Stream (Free IEX WebSocket + GitHub GEX/Briefings)</b><br><span class="note">Connects to <code>wss://stream.data.alpaca.markets/v2/iex</code> with Paper keys stored ONLY in this browser's localStorage. Keeps hourly GEX archive polling in parallel. Paper host only — never live <code>api.alpaca.markets</code>.</span></span></label>
- <div id="fmAlpacaBox" style="display:none;margin:8px 0;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)">
-  <div class="note" style="margin:0 0 8px">Keys stay in <code>localStorage["horsey_alpaca_paper"]</code> on this device only — never written to the repo. Browser CORS on <code>paper-api.alpaca.markets</code> allows REST; IEX WebSocket has no CORS restriction.</div>
-  <label for="fmAlpacaKey">Alpaca Paper Key ID (PK…)</label><input type="password" id="fmAlpacaKey" autocomplete="off" placeholder="PK…">
-  <label for="fmAlpacaSecret">Alpaca Paper Secret Key</label><input type="password" id="fmAlpacaSecret" autocomplete="off" placeholder="Secret">
-  <div class="row" style="margin-top:8px;gap:8px"><button type="button" id="fmAlpacaClear">Clear saved Paper keys</button><span class="note" id="fmAlpacaMsg"></span></div>
- </div>
- <label for="fmRest">REST URL</label><input type="url" id="fmRest" placeholder="https://your-feed.example.com/spy-gamma.json">
- <label for="fmWs">WebSocket URL</label><input type="url" id="fmWs" placeholder="wss://your-feed.example.com/stream">
- <label for="fmPoll">Poll interval (seconds)</label><input type="number" id="fmPoll" min="5" value="60">
- <label class="opt"><input type="checkbox" id="fmAuto"><span>Auto-refresh enabled</span></label>
- <label for="fmToastSec">Banner auto-dismiss (seconds)</label><input type="number" id="fmToastSec" min="5" max="60" value="14">
- <label class="opt"><input type="checkbox" id="fmBrowserNote"><span>Also try browser Notification API (when permitted)</span></label>
- <div class="row" style="margin-top:12px;gap:8px;justify-content:space-between;flex-wrap:wrap">
-  <button type="button" id="fmTestBanner">🔔 Test Banner</button>
-  <div class="row" style="gap:8px"><button id="fmReset">Reset to default</button><button id="fmSave" class="on">Save &amp; Connect</button></div>
- </div>
- <p class="note" id="fmStat"></p>
-</div></div>
 <script>
-const $=id=>document.getElementById(id);
-const HAS_CHART=typeof Chart!=="undefined";
-if(HAS_CHART){Chart.defaults.color="#8b97b0";Chart.defaults.borderColor="#243049";Chart.defaults.font.family="-apple-system,BlinkMacSystemFont,Segoe UI,Inter,Roboto,sans-serif";}
-const n=(v,d=2)=>v==null||isNaN(v)?"—":Number(v).toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d});
-const pct=(v,d=2)=>v==null?"—":(v>0?"+":"")+n(v,d)+"%";
-const sgn=(v,d=2)=>v==null?"—":(v>0?"+":"")+n(v,d);
-const cls=v=>v==null?"":v>0?"pos":v<0?"neg":"";
-const B=v=>v==null?"—":(v<0?"-":"")+"$"+n(Math.abs(v)/1e9,2)+"B";
-const M=v=>v==null?"—":(v<0?"-":"")+"$"+n(Math.abs(v)/1e6,1)+"M";
-const K=v=>v==null?"—":Number(v).toLocaleString("en-US");
-const fmtD=s=>{const d=new Date(s+"T12:00:00");return d.toLocaleDateString("en-US",{month:"short",day:"numeric"})};
-function err(m){const e=$("err");e.style.display="block";e.textContent=m}
-function mk(id,cfg){if(!HAS_CHART){$(id).parentElement.innerHTML='<div class="note">Chart library unavailable (offline CDN). Tables below remain accurate.</div>';return}
- if(charts[id])charts[id].destroy();charts[id]=new Chart($(id),cfg)}
-// plugin: vertical reference lines on category x-axis
-const vlines={id:"vlines",afterDatasetsDraw(c,a,o){const L=o&&o.lines;if(!L)return;const{ctx,chartArea:ca,scales:{x}}=c;ctx.save();
- L.forEach(l=>{let px=null;if(x.type==="category"){const labs=c.data.labels;let i=labs.findIndex(v=>+v>=l.v);if(i<0)return;if(i>0&&+labs[i]!==l.v){const a0=+labs[i-1],a1=+labs[i];px=x.getPixelForValue(i-1)+(x.getPixelForValue(i)-x.getPixelForValue(i-1))*(l.v-a0)/(a1-a0)}else px=x.getPixelForValue(i)}else px=x.getPixelForValue(l.v);
- if(px==null||px<ca.left||px>ca.right)return;ctx.strokeStyle=l.c;ctx.lineWidth=l.w||1.5;ctx.setLineDash(l.dash||[]);ctx.beginPath();ctx.moveTo(px,ca.top);ctx.lineTo(px,ca.bottom);ctx.stroke();ctx.setLineDash([]);
- ctx.fillStyle=l.c;ctx.font="600 11px sans-serif";ctx.textAlign="left";ctx.fillText(l.t,Math.min(px+3,ca.right-70),ca.top+12+(l.row||0)*13)});ctx.restore()}};
-// horizontal ref lines
-const hlines={id:"hlines",afterDatasetsDraw(c,a,o){const L=o&&o.lines;if(!L)return;const{ctx,chartArea:ca}=c;ctx.save();L.forEach(l=>{const y=c.scales[l.axis||"y"];if(!y)return;const py=y.getPixelForValue(l.v);if(py<ca.top||py>ca.bottom)return;ctx.strokeStyle=l.c;ctx.setLineDash(l.dash||[5,4]);ctx.beginPath();ctx.moveTo(ca.left,py);ctx.lineTo(ca.right,py);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=l.c;ctx.font="600 11px sans-serif";ctx.fillText(l.t,ca.left+4,py-4)});ctx.restore()}};
-if(HAS_CHART)Chart.register(vlines,hlines);
+(function(){
+"use strict";
+const APP_URL = "./vault/app.enc.json";
+const STATE_URL = "./vault/state.enc.json";
+const DK_LS = "horsey_vault_dk";
+const META_LS = "horsey_vault_meta";
+const nativeFetch = window.fetch.bind(window);
+let VAULT_FILES = Object.create(null);
+let activeKey = null;
+let activeSaltB64 = null;
+let stateRefreshAt = 0;
+const STATE_REFRESH_MS = 4000;
 
+const $ = (id) => document.getElementById(id);
+const errBox = $("vaultErr");
+function showErr(msg){ errBox.textContent = msg; errBox.classList.add("show"); }
+function clearErr(){ errBox.textContent = ""; errBox.classList.remove("show"); }
 
-function cacheBust(u){const sep=String(u).includes("?")?"&":"?";return u+sep+"_cb="+Math.floor(Date.now()/15000)}
-let POD_PRIVATE=false;
-function markPodPrivate(on){POD_PRIVATE=!!on;try{window.POD_PRIVATE=POD_PRIVATE}catch(e){}const n=$("podPrivateNote");if(!n)return;if(on){n.style.display="block";n.innerHTML="🔒 Pod directory is private (<code>pod/</code> gitignored on the public GitHub archive). Open against a local server or connect REST / Alpaca Paper in Data Source to use Briefings, CEO Decisions, and the Agent Pod desk. Market GEX snapshots still load normally."}else n.style.display="none"}
-async function getJSON(u,opts){const soft=opts&&opts.soft;const r=await fetch(cacheBust(u),{cache:"no-store"});if(!r.ok){if(soft)return null;throw new Error(u+" → HTTP "+r.status)}return r.json()}
-async function getTextCB(u,opts){const soft=opts&&opts.soft;const r=await fetch(cacheBust(u),{cache:"no-store"});if(!r.ok){if(soft)return null;throw new Error(u+" → HTTP "+r.status)}return r.text()}
-async function getPodJSON(u){const r=await fetch(cacheBust(u),{cache:"no-store"});if(r.status===404){markPodPrivate(true);return null}if(!r.ok)return null;markPodPrivate(false);return r.json()}
-async function getPodText(u){const r=await fetch(cacheBust(u),{cache:"no-store"});if(r.status===404){markPodPrivate(true);return null}if(!r.ok)return null;return r.text()}
-let IDX=null,S=null,LOG=null,CUR=0,MDTXT="",charts={},st={scope:"next_session",mode:"net",px:"intraday",rs:"d1_pct",sortK:null,sortDir:-1,tab:"briefings",mdRaw:false};
-const LIVE={};
-function btns(id,items,key,fn){const w=$(id);w.innerHTML="";items.forEach(([v,l])=>{const b=document.createElement("button");b.textContent=l;b.dataset.v=v;b.onclick=()=>{st[key]=v;[...w.children].forEach(x=>x.classList.toggle("on",x.dataset.v===v));fn()};if(st[key]===v)b.classList.add("on");w.appendChild(b)})}
-function buildButtons(){
- btns("modeBtns",[["net","Net GEX ($M / 1%)"],["cp","Call vs Put GEX ($M / 1%)"]],"mode",drawGex);
- btns("pxBtns",[["intraday","Session Intraday (30m CT + Put/Call Vol)"],["daily","15-Session Daily Trend (vs 20D/200D SMA + Share Vol)"],["log","Hourly Monitor Log (timeseries.jsonl)"]],"px",drawPx);
- btns("rsBtns",[["d1_pct","1D Return (%)"],["vs_spy_1d_pp","1D vs SPY (pp)"],["d5_pct","5D Return (%)"],["d20_pct","20D Return (%)"]],"rs",drawRs)}
-const SCOPES=[["next_session",null],["upcoming_45d","Upcoming ≤45 DTE"],["monthly_opex","Monthly OPEX"],["upcoming_all","All Expiries"]];
-function scopeLabel(k){const g=S.gex_scopes[k]||{};const ex=g.expirations||[];if(k==="next_session")return (ex[0]?fmtD(ex[0]):"Next")+" (0DTE)";if(k==="monthly_opex")return "Monthly OPEX"+(ex[0]?" "+fmtD(ex[0]):"");return SCOPES.find(s=>s[0]===k)[1]}
-const wall=(g,k)=>(g[k]&&g[k][0])?g[k][0].strike:null;
-const zg=g=>g.zero_gamma_repriced_model&&g.zero_gamma_repriced_model.zero_gamma_level;
-function drawGex(){const g=S.gex_scopes[st.scope],sp=S.spy_detail,rows=g.strikes_700_810||[];const labels=rows.map(r=>r.strike);
- const ds=st.mode==="net"?[{label:"Net GEX ($M)",data:rows.map(r=>r.net_gex/1e6),backgroundColor:rows.map(r=>r.strike===735?"#facc15":r.net_gex>=0?"#22c55e":"#f43f5e")}]
-  :[{label:"Call GEX ($M)",data:rows.map(r=>r.call_gex/1e6),backgroundColor:rows.map(r=>r.strike===735?"#facc15":"#22c55e"),stack:"s"},{label:"Put GEX ($M)",data:rows.map(r=>r.put_gex/1e6),backgroundColor:rows.map(r=>r.strike===735?"#eab308":"#f43f5e"),stack:"s"}];
- const cw=wall(g,"call_walls_by_gex"),pw=wall(g,"put_walls_by_gex");const spot=S.gex_meta?.gex_spot??sp.current_price;
- const lines=[{v:735,c:"#facc15",t:"$735 node",row:0},{v:sp.sma200,c:"#a78bfa",t:`200 SMA $${n(sp.sma200)}`,dash:[6,4],row:1},{v:spot,c:"#38bdf8",t:`Spot $${n(spot)}`,row:2},
-  cw&&{v:cw,c:"#22c55e",t:`Call wall $${cw}`,dash:[2,3],row:3},pw&&{v:pw,c:"#f43f5e",t:`Put wall $${pw}`,dash:[2,3],row:4}].filter(Boolean);
- mk("gexChart",{type:"bar",data:{labels,datasets:ds},options:{maintainAspectRatio:false,animation:false,interaction:{mode:"index",intersect:false},
-  scales:{x:{stacked:st.mode!=="net",ticks:{autoSkip:true,maxRotation:0}},y:{stacked:st.mode!=="net",title:{display:true,text:"$M per 1% move"}}},
-  plugins:{legend:{display:st.mode!=="net"},vlines:{lines},tooltip:{callbacks:{title:i=>"Strike $"+i[0].label,afterBody:i=>{const r=rows[i[0].dataIndex];return[`Call OI ${K(r.call_oi)} · Put OI ${K(r.put_oi)}`,`Call Vol ${K(r.call_vol)} · Put Vol ${K(r.put_vol)}`]}}}}}});
- $("gexNote").textContent=`${scopeLabel(st.scope)} · ${(g.expirations||[]).length} expiries · Net ${B(g.totals.net_gex)} · Model zero-γ ≈ $${n(zg(g))} · ${S.gex_meta?.dealer_assumption||""}`}
-function drawScopeTbl(){const h="<tr><th>Scope</th><th>Expiries</th><th>Net GEX</th><th>Call Wall</th><th>Put Wall</th><th>P/C OI</th><th>P/C Vol</th><th>Model Zero-γ</th></tr>";
- $("scopeTbl").innerHTML=h+SCOPES.map(([k])=>{const g=S.gex_scopes[k],t=g.totals;return`<tr><td>${scopeLabel(k)}</td><td>${(g.expirations||[]).length}</td><td class="${cls(t.net_gex)}">${B(t.net_gex)}</td><td>$${n(wall(g,"call_walls_by_gex"),0)}</td><td>$${n(wall(g,"put_walls_by_gex"),0)}</td><td>${n(t.put_call_oi_ratio)}</td><td>${n(t.put_call_volume_ratio)}</td><td>${zg(g)!=null?"$"+n(zg(g)):"—"}</td></tr>`}).join("")}
-function drawPx(){const sp=S.spy_detail;$("logTblWrap").style.display="none";let note="";
- if(st.px==="intraday"){const r=S.intraday_30m||[];
-  mk("pxChart",{type:"bar",data:{labels:r.map(x=>x.slot_ct+" CT"),datasets:[
-   {type:"line",label:"SPY 30m close",data:r.map(x=>x.close),borderColor:"#38bdf8",backgroundColor:"#38bdf8",yAxisID:"y",tension:.2,pointRadius:2,order:0},
-   {type:"line",label:"200 SMA",data:r.map(()=>sp.sma200),borderColor:"#a78bfa",borderDash:[6,4],pointRadius:0,yAxisID:"y",order:0},
-   {type:"line",label:"$735 node",data:r.map(()=>735),borderColor:"#facc15",borderDash:[3,3],pointRadius:0,yAxisID:"y",order:0},
-   {label:"Call vol (K)",data:r.map(x=>x.call_vol_k),backgroundColor:"rgba(34,197,94,.55)",yAxisID:"y2",stack:"v",order:1},
-   {label:"Put vol (K)",data:r.map(x=>x.put_vol_k),backgroundColor:"rgba(244,63,94,.55)",yAxisID:"y2",stack:"v",order:1}]},
-   options:{maintainAspectRatio:false,animation:false,interaction:{mode:"index",intersect:false},scales:{y:{position:"left",title:{display:true,text:"SPY $"}},y2:{position:"right",stacked:true,grid:{display:false},title:{display:true,text:"Options vol (K contracts)"}},x:{stacked:true}},
-   plugins:{tooltip:{callbacks:{afterBody:i=>{const x=r[i[0].dataIndex];return x?["Share vol "+n(x.stock_vol_m,2)+"M"]:[]}}}}}});
-  note=r.length?`Session ${S.session_date} · ${r.length} × 30-minute CT buckets (Cboe 1-min intraday, bucket close + summed volume).`:"No intraday data in this snapshot."}
- else if(st.px==="daily"){const r=S.daily_15d||[];
-  mk("pxChart",{type:"bar",data:{labels:r.map(x=>fmtD(x.date)),datasets:[
-   {type:"line",label:"SPY close",data:r.map(x=>x.close),borderColor:"#38bdf8",yAxisID:"y",tension:.15,order:0},
-   {type:"line",label:"20D SMA",data:r.map(x=>x.sma20),borderColor:"#f59e0b",borderDash:[4,3],pointRadius:0,yAxisID:"y",order:0},
-   {type:"line",label:"200D SMA",data:r.map(x=>x.sma200),borderColor:"#a78bfa",borderDash:[6,4],pointRadius:0,yAxisID:"y",order:0},
-   {type:"line",label:"$735 node",data:r.map(()=>735),borderColor:"#facc15",borderDash:[3,3],pointRadius:0,yAxisID:"y",order:0},
-   {label:"Share vol (M)",data:r.map(x=>x.volume_m),backgroundColor:"rgba(148,163,184,.35)",yAxisID:"y2",order:1}]},
-   options:{maintainAspectRatio:false,animation:false,interaction:{mode:"index",intersect:false},scales:{y:{title:{display:true,text:"SPY $"}},y2:{position:"right",grid:{display:false},title:{display:true,text:"Volume (M shares)"}}}}});
-  note=`Last ${r.length} completed sessions (Yahoo Finance daily, unadjusted close; SMAs computed from closes).`}
- else{const r=LOG||[];const lab=r.map(x=>new Date(x.timestamp_utc).toLocaleString("en-US",{timeZone:"America/Chicago",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}));
-  mk("pxChart",{type:"line",data:{labels:lab,datasets:[
-   {label:"SPY price",data:r.map(x=>x.spy_price),borderColor:"#38bdf8",backgroundColor:"#38bdf8",yAxisID:"y",pointRadius:5},
-   {label:"Net GEX ≤45D ($B)",data:r.map(x=>x.net_gex_45d_dollars/1e9),borderColor:"#f43f5e",backgroundColor:"#f43f5e",yAxisID:"y2",pointRadius:5},
-   {label:"VIX",data:r.map(x=>x.vix),borderColor:"#f59e0b",backgroundColor:"#f59e0b",yAxisID:"y3",pointRadius:5}]},
-   options:{maintainAspectRatio:false,animation:false,interaction:{mode:"index",intersect:false},scales:{y:{title:{display:true,text:"SPY $"}},y2:{position:"right",grid:{display:false},title:{display:true,text:"GEX $B"}},y3:{position:"right",grid:{display:false},title:{display:true,text:"VIX"}}}}});
-  note=r.length===1?"1 baseline point logged so far — the time series grows with every hourly (8:00 AM–3:00 PM CT) and post-close run.":`${r.length} logged runs (CT).`;
-  $("logTblWrap").style.display="block";
-  $("logTbl").innerHTML="<tr><th>Time (CT)</th><th>Tag</th><th>SPY</th><th>1D</th><th>Net GEX ≤45D</th><th>0DTE Net</th><th>Walls ≤45D (P/C)</th><th>VIX</th><th>200 SMA dist</th></tr>"+r.slice().reverse().map((x,i)=>`<tr><td>${lab[r.length-1-i]}</td><td>${x.run_tag}</td><td>$${n(x.spy_price)}</td><td class="${cls(x.spy_1d_pct)}">${pct(x.spy_1d_pct)}</td><td class="${cls(x.net_gex_45d_dollars)}">${B(x.net_gex_45d_dollars)}</td><td class="${cls(x.net_gex_0dte_dollars)}">${B(x.net_gex_0dte_dollars)}</td><td>$${n(x.put_wall_45d,0)} / $${n(x.call_wall_45d,0)}</td><td>${n(x.vix)}</td><td>${sgn(x.spy_sma_200_dist_dollars)} (${pct(x.spy_sma_200_dist_pct)})</td></tr>`).join("")}
- $("pxNote").textContent=note}
-function drawNode(){const rows=SCOPES.map(([k])=>[scopeLabel(k),S.gex_scopes[k].node_735||{}]);
- $("nodeTbl").innerHTML="<tr><th>Scope</th><th>Net GEX</th><th>Call GEX</th><th>Put GEX</th><th>Call OI</th><th>Put OI</th><th>Call Vol</th><th>Put Vol</th></tr>"+rows.map(([l,x])=>`<tr><td>${l}</td><td class="${cls(x.net_gex)}">${M(x.net_gex)}</td><td>${M(x.call_gex)}</td><td>${M(x.put_gex)}</td><td>${K(x.call_oi)}</td><td>${K(x.put_oi)}</td><td>${K(x.call_volume)}</td><td>${K(x.put_volume)}</td></tr>`).join("")}
-function drawVix(){const r=S.volatility_table||[];const tenor=r.filter(x=>x.symbol!=="^VVIX");
- mk("vixChart",{type:"bar",data:{labels:tenor.map(x=>x.symbol+" ("+x.label+")"),datasets:[{label:"Close",data:tenor.map(x=>x.close),backgroundColor:["#f43f5e","#f59e0b","#38bdf8"]},{label:"20D SMA",data:tenor.map(x=>x.sma20),backgroundColor:"rgba(148,163,184,.4)"}]},options:{maintainAspectRatio:false,animation:false}});
- $("vixTbl").innerHTML="<tr><th>Index</th><th>Close</th><th>1D</th><th>20D SMA</th></tr>"+r.map(x=>`<tr><td>${x.symbol} <span class="mut">${x.label}</span></td><td>${n(x.close)}</td><td class="${cls(x.d1_pct)}">${pct(x.d1_pct,1)}</td><td>${n(x.sma20)}</td></tr>`).join("");
- const t=S.vol_term_structure||{};$("vixNote").textContent=t.regime?`VIX/VIX3M ${n(t.vix_over_vix3m,3)} · VIX9D−VIX ${sgn(t.vix9d_minus_vix)} · ${t.regime.replace(/_/g," ")} (${t.note||""})`:""}
-function drawRs(){const k=st.rs;const r=(S.assets_table||[]).slice().sort((a,b)=>(b[k]??-1e9)-(a[k]??-1e9));
- mk("rsChart",{type:"bar",data:{labels:r.map(x=>x.symbol),datasets:[{label:{d1_pct:"1D %",vs_spy_1d_pp:"1D vs SPY (pp)",d5_pct:"5D %",d20_pct:"20D %"}[k],data:r.map(x=>x[k]),backgroundColor:r.map(x=>x.symbol==="SPY"?"#38bdf8":x[k]>=0?"#22c55e":"#f43f5e")}]},options:{indexAxis:"y",maintainAspectRatio:false,animation:false,plugins:{legend:{display:false}}}});
- drawRsTbl()}
-const RSC=[["symbol","Symbol"],["close","Close"],["d1_pct","1D %"],["d5_pct","5D %"],["d20_pct","20D %"],["vs_spy_1d_pp","1D vs SPY"],["rvol_20d","Rel Vol"],["sma200_dist_pct","200 SMA & Dist"]];
-function drawRsTbl(){let r=(S.assets_table||[]).slice();const k=st.sortK||st.rs;r.sort((a,b)=>{const x=a[k],y=b[k];if(typeof x==="string")return st.sortDir*(y<x?-1:1)*-1;return st.sortDir*((x??-1e9)-(y??-1e9))});
- $("rsTbl").innerHTML="<tr>"+RSC.map(([c,l])=>`<th class="sort" data-k="${c}">${l}${k===c?(st.sortDir<0?" ▼":" ▲"):""}</th>`).join("")+"</tr>"+r.map(x=>`<tr class="${x.symbol==="SPY"?"hl":""}"><td>${x.symbol}</td><td>${n(x.close)}</td><td class="${cls(x.d1_pct)}">${pct(x.d1_pct)}</td><td class="${cls(x.d5_pct)}">${pct(x.d5_pct)}</td><td class="${cls(x.d20_pct)}">${pct(x.d20_pct)}</td><td class="${cls(x.vs_spy_1d_pp)}">${sgn(x.vs_spy_1d_pp)}pp</td><td>${x.rvol_20d!=null?n(x.rvol_20d)+"×":"—"}</td><td>${n(x.sma200)} <span class="${cls(x.sma200_dist_pct)}">(${pct(x.sma200_dist_pct)})</span></td></tr>`).join("");
- [...$("rsTbl").querySelectorAll("th.sort")].forEach(th=>th.onclick=()=>{const c=th.dataset.k;if((st.sortK||st.rs)===c)st.sortDir*=-1;else{st.sortK=c;st.sortDir=-1}drawRsTbl()})}
-function drawFut(){const r=S.futures_table||[];const nm={"ES=F":"/ES","NQ=F":"/NQ","RTY=F":"/RTY"};
- $("futTbl").innerHTML="<tr><th>Contract</th><th>Quote</th><th>Time (CT)</th><th>vs Ref</th><th>RTH/Daily Close</th><th>O/N vs Close</th><th>O/N Range</th><th>Prior Range</th></tr>"+r.map(x=>`<tr><td>${nm[x.symbol]||x.symbol}</td><td>${n(x.quote)}</td><td>${(x.timestamp_ct||"").replace(/^\d{4}-/,"")}</td><td class="${cls(x.vs_ref_dollars)}">${sgn(x.vs_ref_dollars)} (${pct(x.vs_ref_pct,3)})</td><td>${n(x.rth_close)}</td><td class="${cls(x.overnight_vs_close_pct)}">${pct(x.overnight_vs_close_pct,3)}</td><td>${n(x.overnight_range[0])}–${n(x.overnight_range[1])}</td><td>${n(x.prior_range[0])}–${n(x.prior_range[1])}</td></tr>`).join("")}
-const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-function drawNews(){const r=S.verified_headlines||[];$("news").innerHTML=r.length?r.map(h=>`<li><a href="${esc(h.url)}" target="_blank" rel="noopener">${esc(h.title)}</a><div class="meta">${esc(h.published||h.session)}${h.source?" · "+esc(h.source):""}</div>${h.summary?`<div style="font-size:13px;margin-top:3px">${esc(h.summary)}</div>`:""}</li>`).join(""):'<li class="mut">No verified headlines in this snapshot.</li>'}
-
-
-/* ---------- Tier 1: hero strip ---------- */
-const kv=rows=>rows.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join("");
-const c=(v,t)=>`<span class="${cls(v)}">${t}</span>`;
-function heroData(){const sp=S.spy_detail||{},G=S.gex_scopes,g45=G.upcoming_45d,g0=G.next_session,go=G.monthly_opex,ga=G.upcoming_all;
- const vt=Object.fromEntries((S.volatility_table||[]).map(r=>[r.symbol,r])),at=Object.fromEntries((S.assets_table||[]).map(r=>[r.symbol,r])),ft=Object.fromEntries((S.futures_table||[]).map(r=>[r.symbol,r]));
- return{sp,G,g45,g0,go,ga,vt,at,ft}}
-function renderHero(){const{sp,g45,g0,go,ga,vt,at,ft}=heroData();
- const price=LIVE.spy_price??sp.current_price, dist=price!=null&&sp.sma200?price-sp.sma200:null;
- // 1 SPY
- $("h1").className="card hc "+(sp.sma200_dist_dollars>=0?"pos":"neg");
- $("h1v").innerHTML=`$${n(sp.close)}`;
- $("h1c").innerHTML=c(sp.d1_pct,`${pct(sp.d1_pct)} · ${sgn(sp.change_dollars)}`)+` <span class="mut" style="font-weight:500">regular close</span>`;
- $("h1p").innerHTML=`<span class="pill ${sp.sma200_dist_dollars>=0?"pos":"neg"}">${sp.sma200_dist_dollars>=0?"ABOVE":"BELOW"} 200 SMA</span>`;
- $("h1k").innerHTML=kv([[LIVE.spy_price!=null?"Live quote":"Post-close / latest quote",`$${n(price)}`+(LIVE.spy_change_pct!=null?" "+c(LIVE.spy_change_pct,pct(LIVE.spy_change_pct)):"")],["GEX reference spot",`$${n(S.gex_meta?.gex_spot)}`],
-  ["200-Day SMA",`<b>$${n(sp.sma200)}</b> ${c(sp.sma200_dist_dollars,`${sgn(sp.sma200_dist_dollars)} (${pct(sp.sma200_dist_pct)})`)}`],
-  LIVE.spy_price!=null?["Live vs 200 SMA",c(dist,sgn(dist))]:null,
-  ["20D / 50D SMA",`$${n(sp.sma20)} / $${n(sp.sma50)}`],["5D / 20D return",`${c(sp.d5_pct,pct(sp.d5_pct))} / ${c(sp.d20_pct,pct(sp.d20_pct))}`],
-  ["Session volume",`${n((LIVE.spy_volume??sp.volume)/1e6,2)}M`],["vs 20D avg",`<b>${n(sp.rvol_20d)}×</b> (${n(sp.vol_avg_20d/1e6,2)}M)`],["O / H / L",`${n(sp.open)} / ${n(sp.high)} / ${n(sp.low)}`]].filter(Boolean));
- // 2 Gamma
- const ng=LIVE.gex_45d??g45.totals.net_gex, n0=LIVE.gex_0dte??g0.totals.net_gex;
- $("h2").className="card hc "+(ng<0?"neg":"pos");
- $("h2p").innerHTML=`<span class="pill ${ng<0?"neg":"pos"}">${ng<0?"SHORT GAMMA":"LONG GAMMA"}</span>`;
- $("h2v").innerHTML=c(ng,B(ng))+`<span class="mut" style="font-size:14px;font-weight:600"> /1% · ≤45 DTE</span>`;
- $("h2c").innerHTML=`0DTE ${c(n0,B(n0))} /1%`;
- $("h2k").innerHTML=kv([["Model zero-γ ≤45D",`<b>$${n(LIVE.zero_gamma_45d??zg(g45))}</b>`],["Model zero-γ 0DTE",`$${n(zg(g0))}`],["Spot vs ≤45D flip",c(price-(LIVE.zero_gamma_45d??zg(g45)),sgn(price-(LIVE.zero_gamma_45d??zg(g45))))],
-  ["Monthly OPEX net",c(go.totals.net_gex,B(go.totals.net_gex))],["All expiries net",c(ga.totals.net_gex,B(ga.totals.net_gex))],["P/C OI · P/C Vol (≤45D)",`${n(g45.totals.put_call_oi_ratio)} · ${n(g45.totals.put_call_volume_ratio)}`]]);
- // 3 Walls
- const n0d=g0.node_735||{},n45=g45.node_735||{};
- $("h3").className="card hc warn";
- $("h3v").innerHTML=`$735 ${c(n0d.net_gex,M(n0d.net_gex))}`;
- $("h3c").innerHTML=`<span class="mut" style="font-weight:500">0DTE node net</span> · ≤45D ${c(n45.net_gex,M(n45.net_gex))}`;
- $("h3k").innerHTML=kv([["0DTE put OI / put vol",`<b>${K(n0d.put_oi)}</b> / ${K(n0d.put_volume)}`],["0DTE call OI / call vol",`${K(n0d.call_oi)} / ${K(n0d.call_volume)}`],
-  ["0DTE walls (Put / Call)",`<span class="neg">$${n(wall(g0,"put_walls_by_gex"),0)}</span> / <span class="pos">$${n(wall(g0,"call_walls_by_gex"),0)}</span>`],
-  ["≤45D walls (Put / Call)",`<span class="neg">$${n(LIVE.put_wall_45d??wall(g45,"put_walls_by_gex"),0)}</span> / <span class="pos">$${n(LIVE.call_wall_45d??wall(g45,"call_walls_by_gex"),0)}</span>`],
-  ["OPEX walls (Put / Call)",`<span class="neg">$${n(wall(S.gex_scopes.monthly_opex,"put_walls_by_gex"),0)}</span> / <span class="pos">$${n(wall(S.gex_scopes.monthly_opex,"call_walls_by_gex"),0)}</span>`]]);
- // 4 Vol
- const v=LIVE.vix??vt["^VIX"]?.close,v9=LIVE.vix9d??vt["^VIX9D"]?.close,v3=LIVE.vix3m??vt["^VIX3M"]?.close;
- const bw=v9>v&&v>v3,ct=v9<v&&v<v3;
- $("h4").className="card hc "+(bw?"neg":ct?"pos":"warn");
- $("h4p").innerHTML=`<span class="pill ${bw?"neg":ct?"pos":"warn"}">${bw?"BACKWARDATION":ct?"CONTANGO":"MIXED"}</span>`;
- $("h4v").innerHTML=`VIX ${n(v)}`;$("h4c").innerHTML=c(vt["^VIX"]?.d1_pct,pct(vt["^VIX"]?.d1_pct))+` <span class="mut" style="font-weight:500">1D</span>`;
- const sox=at["^SOX"],nv=at["NVDA"],bkx=at["^BKX"],es=ft["ES=F"],nq=ft["NQ=F"];
- $("h4k").innerHTML=kv([["Curve 9D › 30D › 3M",`${n(v9)} ${v9>v?">":"<"} ${n(v)} ${v>v3?">":"<"} ${n(v3)}`],["VVIX",`${n(vt["^VVIX"]?.close)} ${c(vt["^VVIX"]?.d1_pct,pct(vt["^VVIX"]?.d1_pct,1))}`],
-  ["^SOX 1D (vs SPY)",`${c(sox?.d1_pct,pct(sox?.d1_pct))} (${c(sox?.vs_spy_1d_pp,sgn(sox?.vs_spy_1d_pp)+"pp")})`],["NVDA 1D (vs SPY)",`${c(nv?.d1_pct,pct(nv?.d1_pct))} (${c(nv?.vs_spy_1d_pp,sgn(nv?.vs_spy_1d_pp)+"pp")})`],
-  ["^BKX 1D (vs SPY)",`${c(bkx?.d1_pct,pct(bkx?.d1_pct))} (${c(bkx?.vs_spy_1d_pp,sgn(bkx?.vs_spy_1d_pp)+"pp")})`],["/ES · /NQ",`${n(LIVE.es_price??es?.quote)} · ${n(LIVE.nq_price??nq?.quote)}`]]);
- renderRuler()}
-/* ---------- Structural level ruler ---------- */
-function renderRuler(){const{sp,g45,g0}=heroData();const price=LIVE.spy_price??sp.close;
- const L=[{v:sp.sma200,t:"200 SMA",col:"#a78bfa"},{v:735,t:"$735 Node · 0DTE Put Wall",col:"#facc15"},{v:LIVE.put_wall_45d??wall(g45,"put_walls_by_gex"),t:"45D Put Wall",col:"#f43f5e"},
-  {v:zg(g0),t:"0DTE Zero-γ",col:"#94a3b8"},{v:wall(g0,"call_walls_by_gex"),t:"0DTE Call Wall",col:"#22c55e"},{v:LIVE.zero_gamma_45d??zg(g45),t:"45D Zero-γ",col:"#cbd5e1"},{v:LIVE.call_wall_45d??wall(g45,"call_walls_by_gex"),t:"45D Call Wall",col:"#22c55e"}];
- const p0=wall(g0,"put_walls_by_gex");if(p0!==735)L.push({v:p0,t:"0DTE Put Wall",col:"#f43f5e"});
- const ok=L.filter(l=>l.v!=null);const all=ok.map(l=>l.v).concat([price]);let lo=Math.min(...all),hi=Math.max(...all);const pad=(hi-lo)*.06||2;lo-=pad;hi+=pad;
- const X=v=>((v-lo)/(hi-lo)*100);
- ok.sort((a,b)=>a.v-b.v);const W=$("track").clientWidth||800,minGap=Math.max(9,11000/W);
- const rowsAbove=[],rowsBelow=[];let html="";
- const zl=zg(g45);if(zl!=null){const a=Math.min(price,zl),b=Math.max(price,zl);html+=`<div class="zone" style="left:${X(a)}%;width:${X(b)-X(a)}%" title="Spot below ≤45D model zero-γ (short-gamma zone)"></div>`}
- ok.forEach((l,i)=>{const x=X(l.v),above=i%2===0,rows=above?rowsAbove:rowsBelow;let r=0;while(rows[r]!=null&&x-rows[r]<minGap)r++;rows[r]=x;
-  const pos=above?`bottom:${150-58+r*26}px`:`top:${96+r*26}px`;const xc=Math.min(Math.max(x,6),94);
-  html+=`<div class="mk" style="left:${x}%;background:${l.col}"></div><div class="lb" style="left:${xc}%;${pos};color:${l.col}">${l.t}<small>$${n(l.v)}</small></div>`});
- html=`<div class="bar"></div>`+html+`<div class="spotmk" id="spotmk" style="left:${X(price)}%" title="Spot"></div><div class="lb" style="left:${Math.min(Math.max(X(price),6),94)}%;top:${96+((rowsBelow.length)*26)}px;color:var(--acc)">${LIVE.spy_price!=null?"LIVE SPOT":"SPOT / CLOSE"}<small>$${n(price)}</small></div>`;
- const maxR=Math.max(rowsAbove.length,rowsBelow.length+1);$("track").style.height=(150+Math.max(0,maxR-2)*52)+"px";
- $("track").querySelectorAll?0:0;$("track").innerHTML=html;
- // shift layout down for extra above rows
- const extra=Math.max(0,rowsAbove.length-2)*26;$("track").style.paddingTop=extra+"px";$("track").querySelectorAll(".bar,.zone,.mk,.spotmk").forEach(e=>e.style.marginTop=extra+"px");$("track").querySelectorAll(".lb").forEach(e=>{if(e.style.top)e.style.marginTop=extra+"px"});
- $("rulerNote").textContent=`Scale $${n(lo,0)}–$${n(hi,0)} · shaded = spot↔≤45D model zero-γ gap`}
-/* ---------- tabs ---------- */
-function resizeCharts(){requestAnimationFrame(()=>Object.values(charts).forEach(ch=>{try{ch.resize();ch.update("none")}catch(e){}}))}
-function showTab(t){st.tab=t;document.body.classList.toggle("all",t==="all");
- [...$("tabs").querySelectorAll("button")].forEach(b=>b.classList.toggle("on",b.dataset.tab===t));
- if(t==="news")t="rs";if(t==="briefing")t="briefings";st.tab=t;[...$("tabs").querySelectorAll("button")].forEach(b=>b.classList.toggle("on",b.dataset.tab===t));
- ["briefings","gamma","px","rs","news","play","pod"].forEach(k=>$("p-"+k).classList.toggle("show",t==="all"?(k!=="play"):(k===t||(k==="news"&&t==="rs"))));
- if(t==="briefings"||t==="all")loadBriefings();
- if(t==="play")loadPlaybook();if(t==="pod"||t==="all")loadPod();if(t==="rs"||t==="all")loadMd();resizeCharts()}
-$("tabs").onclick=e=>{const b=e.target.closest("button");if(b){showTab(b.dataset.tab);const y=$("tabs").getBoundingClientRect().top+scrollY-$("tabs").offsetTop+0;}};
-$("qbPlay").onclick=()=>{showTab("play");$("tabs").scrollIntoView({behavior:"smooth"})};
-function fixSticky(){$("tabs").style.top=document.querySelector(".topbar").offsetHeight+"px"}addEventListener("resize",()=>{fixSticky();if(S)renderRuler()});
-/* ---------- markdown report ---------- */
-let mdFor=null;
-async function loadMd(){const href=$("lnkMd").getAttribute("href");if(!href||mdFor===href)return;mdFor=href;$("md").textContent="Loading…";
- try{MDTXT=await (await fetch(cacheBust(href),{cache:"no-store"})).text();drawMd()}catch(x){$("md").textContent="Failed to load report: "+x.message;mdFor=null}}
-function drawMd(){if(st.mdRaw||typeof marked==="undefined")$("md").innerHTML="<pre>"+esc(MDTXT)+"</pre>";else{$("md").innerHTML=marked.parse(MDTXT);$("md").querySelectorAll("a").forEach(a=>{a.target="_blank";a.rel="noopener"})}
- $("mdView").classList.toggle("on",!st.mdRaw);$("mdRaw").classList.toggle("on",st.mdRaw)}
-$("mdView").onclick=()=>{st.mdRaw=false;drawMd()};$("mdRaw").onclick=()=>{st.mdRaw=true;drawMd()};
-$("mdCopy").onclick=async()=>{try{await navigator.clipboard.writeText(MDTXT);$("mdCopy").textContent="✓ Copied"}catch(e){st.mdRaw=true;drawMd();$("mdCopy").textContent="Select text to copy"}setTimeout(()=>$("mdCopy").textContent="📋 Copy .md",1800)};
-/* ---------- playbook ---------- */
-let pbLoaded=false;
-const slug=s=>s.toLowerCase().replace(/[^\w\s-]/g,"").trim().replace(/\s/g,"-");
-async function loadPlaybook(){if(pbLoaded)return;pbLoaded=true;
- try{const t=await (await fetch(cacheBust("docs/day_trading_methodologies_and_50_mistakes.md"),{cache:"no-store"})).text();
-  const pb=$("pb");pb.innerHTML=typeof marked!=="undefined"?marked.parse(t):"<pre>"+esc(t)+"</pre>";
-  pb.querySelectorAll("h1,h2,h3").forEach(h=>h.id=slug(h.textContent));pb.querySelectorAll("a").forEach(a=>{a.target="_blank";a.rel="noopener"});
-  let cat="";const cats=[];[...pb.children].forEach(el=>{if(el.tagName==="H3"&&/^Category/.test(el.textContent)){cat=el.textContent;cats.push(cat)}if(el.tagName==="H2")cat="";
-   if(el.tagName==="P"&&/^#\d+\s/.test(el.textContent.trim())&&cat){el.classList.add("mistake");el.dataset.cat=cat}});
-  $("pbcat").innerHTML='<option value="">All categories</option>'+cats.map(c=>`<option>${esc(c)}</option>`).join("");filterPb()}
- catch(e){$("pb").textContent="Failed to load playbook: "+e.message;pbLoaded=false}}
-function filterPb(){const q=$("pbq").value.trim().toLowerCase(),cat=$("pbcat").value;const ms=[...$("pb").querySelectorAll("p.mistake")];let shown=0;
- ms.forEach(p=>{const ok=(!q||p.textContent.toLowerCase().includes(q))&&(!cat||p.dataset.cat===cat);p.style.display=ok?"":"none";if(ok)shown++});
- $("pb").querySelectorAll("h3").forEach(h=>{if(/^Category/.test(h.textContent))h.style.display=(!cat||cat===h.textContent)&&ms.some(p=>p.dataset.cat===h.textContent&&p.style.display!=="none")?"":"none"});
- $("pbcount").textContent=(q||cat)?`${shown} of ${ms.length} mistakes match`:`${ms.length} mistakes · 5 legends · comparison matrix`}
-$("pbq").oninput=filterPb;$("pbcat").onchange=filterPb;
-document.querySelectorAll("[data-jump]").forEach(b=>b.onclick=()=>{const el=document.getElementById(b.dataset.jump);if(el)scrollTo({top:el.getBoundingClientRect().top+scrollY-140,behavior:"smooth"})});
-/* ---------- render pipeline (UI side of the adapter) ---------- */
-function renderSnapshot(snap,meta){S=snap;meta=meta||{};try{const sum=S.summary||{},prev=sum.spy_previous_close||sum.spy_prev_close||(S.spy_detail&&S.spy_detail.previous_close);const close=sum.spy_regular_close||sum.spy_price;if(window.SPYGammaFeed&&SPYGammaFeed.setPriorClose)SPYGammaFeed.setPriorClose(prev||close)}catch(e){}
- $("lnkMd").href=$("lnkMd2").href=S.md_rel_path||meta.md_path||"latest.md";$("lnkJson").href=meta.json_path||"latest.json";
- $("asof").textContent=(meta.display_ct||S.timestamp_ct)+(S.gex_meta&&S.gex_meta.chain_timestamp?" · options chain "+utcToCT(S.gex_meta.chain_timestamp):"");
- renderHero();btns("scopeBtns",SCOPES.map(([k])=>[k,scopeLabel(k)]),"scope",drawGex);
- drawGex();drawScopeTbl();drawPx();drawNode();drawVix();drawRs();drawFut();drawNews();mdFor=null;if(st.tab==="rs"||st.tab==="all")loadMd();resizeCharts()}
-function applyLiveTick(t){Object.assign(LIVE,Object.fromEntries(Object.entries(t).filter(([k,v])=>v!=null)));if(!S)return;renderHero();
- const b=$("liveBadge");b.style.display="";b.className="pill pos";b.textContent="● LIVE "+new Date(t.ts||Date.now()).toLocaleTimeString("en-US",{timeZone:"America/Chicago",hour:"numeric",minute:"2-digit",second:"2-digit"})+" CT";
- ["h1v","h2v","h4v"].forEach(id=>{$(id).classList.remove("flash");void $(id).offsetWidth;$(id).classList.add("flash")})}
-function utcToCT(s){const d=new Date(s.replace(" ","T")+"Z");return d.toLocaleString("en-US",{timeZone:"America/Chicago",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})+" CT"}
-function fillIndex(idx){IDX=idx;const sel=$("snapSel"),keep=IDX.snapshots[CUR]?.id;sel.innerHTML="";
- IDX.snapshots.forEach((s,i)=>{const o=document.createElement("option");o.value=i;o.textContent=`${s.display_ct}${s.run_tag?" · "+s.run_tag:""}${s.spy_price!=null?" · $"+n(s.spy_price):""}`;sel.appendChild(o)})}
-async function load(i){CUR=i;$("snapSel").value=i;const meta=IDX.snapshots[i];
- const u=new URL(location);if(i===0)u.searchParams.delete("snap");else u.searchParams.set("snap",meta.id);history.replaceState(null,"",u);
- try{await SPYGammaFeed.loadSnapshot(meta)}catch(e){err("Failed to load snapshot: "+e.message)}}
-/* ---------- feed modal ---------- */
-const F=window.SPYGammaFeed;
-F.onSnapshot(renderSnapshot);F.onTick(applyLiveTick);F.onLog(r=>{LOG=r;if(S&&st.px==="log")drawPx()});
-F.onIndex(idx=>{const wasLatest=CUR===0,prevMeta=IDX&&IDX.snapshots[0],prevTop=prevMeta&&prevMeta.id;window.__prevSnapMeta=prevMeta||null;fillIndex(idx);if(prevTop&&prevTop!==idx.snapshots[0]?.id){if(wasLatest){load(0).then(()=>{if(window.LiveHub)LiveHub.onNewSnapshot(idx.snapshots[0],prevMeta,true)}).catch(()=>{});}else{const i=idx.snapshots.findIndex(s=>s.id===prevTop);if(i>=0){CUR=i;$("snapSel").value=i;}if(window.LiveHub)LiveHub.onNewSnapshot(idx.snapshots[0],prevMeta,false);}}});
-F.onStatus(s=>{$("srcLbl").textContent=s.label;$("srcDot").className="dot "+s.state;$("fmStat").textContent=`State: ${s.state}${s.lastUpdate?" · last update "+s.lastUpdate.toLocaleTimeString("en-US",{timeZone:"America/Chicago"})+" CT":""}`});
-function syncFmAlpacaBox(){const m=document.querySelector('input[name=fm]:checked')?.value;const box=$("fmAlpacaBox");if(box)box.style.display=m==="alpaca_iex"?"":"none"}
-function openFm(){const c=F.config;document.querySelectorAll('input[name=fm]').forEach(r=>r.checked=r.value===c.mode);$("fmRest").value=c.restUrl||"";$("fmWs").value=c.wsUrl||"";$("fmPoll").value=c.pollSec;$("fmAuto").checked=!!c.autoRefresh;
- try{const t=JSON.parse(localStorage.getItem("horsey_live_toast")||"{}");if($("fmToastSec"))$("fmToastSec").value=t.dismissSec||14;if($("fmBrowserNote"))$("fmBrowserNote").checked=!!t.browserNote}catch(e){if($("fmToastSec"))$("fmToastSec").value=14}
- try{const a=JSON.parse(localStorage.getItem("horsey_alpaca_paper")||"null");if($("fmAlpacaKey"))$("fmAlpacaKey").value=a&&a.key?a.key:"";if($("fmAlpacaSecret"))$("fmAlpacaSecret").value=a&&a.secret?a.secret:"";if($("fmAlpacaMsg"))$("fmAlpacaMsg").textContent=a&&a.key?"Paper keys saved in this browser ✓":"No Paper keys in this browser"}catch(e){}
- syncFmAlpacaBox();$("feedModal").classList.add("open")}
-document.querySelectorAll('input[name=fm]').forEach(r=>r.addEventListener("change",syncFmAlpacaBox));
-if($("fmAlpacaClear"))$("fmAlpacaClear").onclick=()=>{try{localStorage.removeItem("horsey_alpaca_paper")}catch(e){}if($("fmAlpacaKey"))$("fmAlpacaKey").value="";if($("fmAlpacaSecret"))$("fmAlpacaSecret").value="";if($("fmAlpacaMsg"))$("fmAlpacaMsg").textContent="Cleared from this browser"}
-$("srcBtn").onclick=openFm;$("fmClose").onclick=()=>$("feedModal").classList.remove("open");$("feedModal").onclick=e=>{if(e.target.id==="feedModal")$("feedModal").classList.remove("open")};
-$("fmSave").onclick=()=>{const mode=document.querySelector('input[name=fm]:checked')?.value||"github_archive";
- if(mode==="alpaca_iex"){const key=($("fmAlpacaKey")&&$("fmAlpacaKey").value||"").trim(),secret=($("fmAlpacaSecret")&&$("fmAlpacaSecret").value||"").trim();
-  if(key&&secret){try{localStorage.setItem("horsey_alpaca_paper",JSON.stringify({key,secret,saved_ct:new Date().toISOString()}))}catch(e){}}
-  else if($("fmAlpacaMsg"))$("fmAlpacaMsg").textContent="Enter both Paper Key ID + Secret (or keep previously saved keys)"}
- F.configure({mode,restUrl:$("fmRest").value.trim(),wsUrl:$("fmWs").value.trim(),pollSec:Math.max(5,+$("fmPoll").value||60),autoRefresh:$("fmAuto").checked});
- try{localStorage.setItem("horsey_live_toast",JSON.stringify({dismissSec:Math.max(5,+(($("fmToastSec")&&$("fmToastSec").value)||14)),browserNote:!!($("fmBrowserNote")&&$("fmBrowserNote").checked)}));if(window.LiveHub)LiveHub.loadPrefs()}catch(e){}
- $("feedModal").classList.remove("open")};
-$("fmReset").onclick=()=>{F.reset();try{localStorage.removeItem("horsey_live_toast")}catch(e){}openFm()};
-document.addEventListener("keydown",e=>{if(e.key==="Escape"){$("feedModal").classList.remove("open");const bp=$("bellPop");if(bp)bp.classList.remove("open")}});
-if($("fmTestBanner"))$("fmTestBanner").onclick=()=>{if(window.LiveHub)LiveHub.testBanner();$("feedModal").classList.remove("open")};
-/* ---------- boot ---------- */
-(async function boot(){fixSticky();buildButtons();
- const idx=await F.loadIndex();fillIndex(idx);F._setIndexTop(idx.snapshots[0]?.id);
- const want=new URLSearchParams(location.search).get("snap");let start=0;if(want){const i=idx.snapshots.findIndex(s=>s.id===want);if(i>=0)start=i}
- $("snapSel").onchange=()=>load(+$("snapSel").value);
- await F.loadLog();await load(start);F.start();
- const tab=(location.hash||"").replace("#","");if(["briefings","briefing","gamma","px","rs","news","play","pod","all"].includes(tab))showTab(tab);fixSticky()})().catch(e=>err(e.message));
-addEventListener("hashchange",()=>{const t=location.hash.slice(1);if(["briefings","briefing","gamma","px","rs","news","play","pod","all"].includes(t))showTab(t)});
-
-
-// ---------- Tab 6: Agent Pod & Blotter (mirrors scripts/pod_engine.py) ----------
-let POD=null;
-
-async function loadPod(force){if(POD&&!force)return POD;if(!POD)POD={};
- const g=async u=>{try{if(u.endsWith(".jsonl")){const t=await getPodText(u);if(t==null)return null;return t.split("\n").filter(Boolean).map(l=>{try{return JSON.parse(l)}catch(e){return null}}).filter(Boolean)}return await getPodJSON(u)}catch(e){return null}};
- [POD.roster,POD.score,POD.state,POD.blot,POD.paper]=await Promise.all([g("pod/roster.json"),g("pod/scorecard.json"),g("pod/signals/latest_pod_state.json"),g("pod/ledger/paper_blotter.jsonl"),g("pod/paper_account_state.json")]);
- // Also try dry-run payload file
- try{POD.dryRun=await getPodJSON("pod/alpaca_last_dry_run.json")}catch(e){POD.dryRun=null}
- if(POD_PRIVATE){renderPodPrivate();return POD}
- renderPod();renderAlpacaDesk();return POD}
-function renderPodPrivate(){
- const msg='<div class="card"><h2>🔒 Agent Pod is private on the public archive</h2><p class="note"><code>pod/</code> is gitignored so CEO briefings, blotter tickets, and Alpaca Paper state stay off GitHub Pages. Run the dashboard against a local checkout (or a private feed) to use Tab 6. Market GEX snapshots on this site still work.</p></div>';
- if($("podBanner"))$("podBanner").innerHTML="";if($("podCio"))$("podCio").innerHTML=msg;if($("podCards"))$("podCards").innerHTML="";
- if($("podScore"))$("podScore").innerHTML="";if($("podBlot"))$("podBlot").innerHTML="";
- if($("alpacaBadge")){$("alpacaBadge").textContent="Pod private on public archive";$("alpacaBadge").className="pill warn"}
- if($("alpacaDeskNote"))$("alpacaDeskNote").textContent="pod/paper_account_state.json not available on public GitHub Pages."}
-function money(v){if(v==null||v===""||isNaN(+v))return "—";return "$"+Number(v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}
-function renderAlpacaDesk(){
- const st=(POD&&POD.paper)||null, badge=$("alpacaBadge"), metrics=$("alpacaMetrics");
- if(!badge)return;
- if(!st){badge.textContent="Awaiting Paper sync";badge.className="pill warn";if(metrics)metrics.innerHTML="";return}
- if(st.status==="awaiting_keys"||st.status==="not_configured"){badge.textContent="Awaiting Paper API Keys";badge.className="pill warn"}
- else if(st.status==="connected"){badge.textContent=`Connected · Paper Equity ${money(st.equity??st.account?.equity)} · BP ${money(st.buying_power??st.account?.buying_power)}`;badge.className="pill pos"}
- else{badge.textContent=String(st.status||"unknown");badge.className="pill"}
- if($("alpacaDeskNote"))$("alpacaDeskNote").textContent=`${st.broker||"Alpaca Paper"} · mode ${st.mode||"paper_only"} · updated ${(st.updated_ct||"—").replace("T"," ").slice(0,19)} CT · host locked ${st.host_locked||"paper-api.alpaca.markets"}`;
- if(metrics){const a=st.account||{};metrics.innerHTML=`<span class="pill">Equity ${money(st.equity??a.equity)}</span><span class="pill">Buying power ${money(st.buying_power??a.buying_power)}</span><span class="pill">Cash ${money(st.cash??a.cash)}</span><span class="pill">${(st.positions||[]).length} positions</span><span class="pill">${(st.orders||[]).length} recent orders</span>`}
- const pos=st.positions||[];
- if($("alpacaPos"))$("alpacaPos").innerHTML=pos.length?`<tr><th>Symbol</th><th>Qty</th><th>Avg</th><th>Mkt</th><th>uPnL</th></tr>`+pos.map(x=>`<tr><td>${esc(x.symbol)}</td><td>${esc(x.qty)}</td><td>${esc(x.avg_entry_price)}</td><td>${esc(x.market_value)}</td><td class="${(+x.unrealized_pl||0)>=0?"pos":"neg"}">${esc(x.unrealized_pl)}</td></tr>`).join(""):`<tr><td class="mut">No open paper positions.</td></tr>`;
- const ord=st.orders||[];
- if($("alpacaOrd"))$("alpacaOrd").innerHTML=ord.length?`<tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Type</th><th>Status</th><th>Limit</th></tr>`+ord.map(x=>`<tr><td>${esc(x.symbol)}</td><td>${esc(x.side)}</td><td>${esc(x.qty)}</td><td>${esc(x.type||x.order_type)}</td><td>${esc(x.status)}</td><td>${esc(x.limit_price||"—")}</td></tr>`).join(""):`<tr><td class="mut">No recent paper orders.</td></tr>`;
- // Preview from blotter ticket payload or dry-run file
- let preview=null;
- const tk=(POD.blot||[]).find(t=>t.ticket_id==="TKT-ITT-2026-11-06-A")||(POD.blot||[]).slice(-1)[0];
- if(tk&&tk.alpaca_paper_payload)preview=tk.alpaca_paper_payload;
- else if(POD.dryRun&&POD.dryRun.payload)preview=POD.dryRun.payload;
- if($("alpacaPreview"))$("alpacaPreview").textContent=preview?JSON.stringify(preview,null,2):"No dry-run payload yet. Local: python3 scripts/pod_engine.py alpaca-stage-ticket --ticket-id TKT-ITT-2026-11-06-A --dry-run";
- // Optional browser live refresh if CORS + keys
- maybeRefreshAlpacaBrowser();
+function b64ToBytes(b64){
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
-async function maybeRefreshAlpacaBrowser(){
- try{
-  const a=JSON.parse(localStorage.getItem("horsey_alpaca_paper")||"null");
-  if(!a||!a.key||!a.secret)return;
-  const headers={"APCA-API-KEY-ID":a.key,"APCA-API-SECRET-KEY":a.secret,"Accept":"application/json"};
-  const acct=await fetch("https://paper-api.alpaca.markets/v2/account",{headers,cache:"no-store"});
-  if(!acct.ok)return;
-  const account=await acct.json();
-  const [pr,or]=await Promise.all([
-    fetch("https://paper-api.alpaca.markets/v2/positions",{headers,cache:"no-store"}).then(r=>r.ok?r.json():[]),
-    fetch("https://paper-api.alpaca.markets/v2/orders?status=all&limit=20",{headers,cache:"no-store"}).then(r=>r.ok?r.json():[])
-  ]);
-  if(!POD)POD={};
-  POD.paper={status:"connected",broker:"Alpaca Paper Trading (paper-api.alpaca.markets)",mode:"paper_only",host_locked:"https://paper-api.alpaca.markets",updated_ct:new Date().toISOString(),
-    equity:+account.equity,buying_power:+account.buying_power,cash:+account.cash,account:{equity:account.equity,buying_power:account.buying_power,cash:account.cash,status:account.status},
-    positions:(pr||[]).map(x=>({symbol:x.symbol,qty:x.qty,avg_entry_price:x.avg_entry_price,market_value:x.market_value,unrealized_pl:x.unrealized_pl,side:x.side})),
-    orders:(or||[]).map(x=>({symbol:x.symbol,side:x.side,qty:x.qty,type:x.type,status:x.status,limit_price:x.limit_price}))};
-  // Re-render metrics only (avoid recursion)
-  const st=POD.paper,badge=$("alpacaBadge"),metrics=$("alpacaMetrics");
-  if(badge){badge.textContent=`Connected · Paper Equity ${money(st.equity)} · BP ${money(st.buying_power)}`;badge.className="pill pos"}
-  if(metrics)metrics.innerHTML=`<span class="pill">Equity ${money(st.equity)}</span><span class="pill">Buying power ${money(st.buying_power)}</span><span class="pill">Cash ${money(st.cash)}</span><span class="pill">${st.positions.length} positions</span><span class="pill">${st.orders.length} recent orders</span><span class="pill pos">live browser refresh</span>`;
- }catch(e){/* CORS or network — synced JSON remains source of truth */}}
-function renderPod(){const R=POD.roster||{},S=POD.state||{},SC=POD.score||{},A=(R.agents||[]),by=id=>A.find(a=>a.id===id)||{};
- const nd=(t,s)=>`<div class="nd">${t}<small>${s}</small></div>`,ar=x=>`<span class="ar">${x}</span>`;
- const sp=A.filter(a=>a.role==="specialist");
- $("podBanner").innerHTML=nd("👤 CEO","Human Principal")+ar("⇄")+nd("🛡️ CIO &amp; Risk Gatekeeper","firewall · sizing · synthesis")+ar("→")+
-  `<div class="grp">${sp.map(a=>nd(esc(a.name),esc(a.timeframe))).join("")}</div>`+ar("⇠")+
-  `<div class="grp">${nd("📡 SPY Gamma Data Engine","Layer 0 · hourly")}${nd("📊 Self-Training Auditor","grade → scorecard")}</div>`;
- $("podAsOf").textContent=S.as_of_ct?`Stances as of ${S.as_of_ct.replace("T"," ").slice(0,16)} CT`:"";
- const m=S.market||{},cs=S.cio_synthesis||{};
- $("podCio").innerHTML=`<h2 style="margin:0 0 6px">🛡️ CIO &amp; Risk Gatekeeper — Synthesis</h2><div class="row" style="gap:6px;margin-bottom:6px">
-  <span class="pill">SPY $${n(m.spy_close)}</span><span class="pill">200-SMA $${n(m.sma200)}</span><span class="pill neg">45D GEX ${B(m.net_gex_45d)}</span>
-  <span class="pill neg">VIX ${n(m.vix)} · VIX9D ${n(m.vix9d)} (backwardated)</span><span class="pill">^SOX ${pct(m.sox_1d_pct)} vs ^BKX ${pct(m.bkx_1d_pct)}</span>
-  <span class="pill" style="color:var(--warn)">Risk throttle ${(cs.risk_throttle_pct||[]).join("%–")}%</span></div><div>${esc(cs.summary)}</div><div class="note">${esc(S.disclaimer)}</div>`;
- const ag=S.agents||{};
- $("podCards").innerHTML=Object.entries(ag).map(([id,x])=>{const w=SC.agents?.[id]?.current_effective_weight;
-  return `<div class="card stc"><h3>${esc(x.name||by(id).name)} ${w!=null?`<span class="pill">weight ${(w*100).toFixed(1)}%</span>`:""}</h3><div class="stance">${esc(x.stance)}</div><div>${esc(x.headline)}</div>
-  ${x.observations?`<ul>${x.observations.map(o=>`<li>${esc(o)}</li>`).join("")}</ul>`:""}
-  ${x.conditional_triggers?`<div class="note" style="margin-top:6px;text-transform:uppercase">Conditional structural triggers</div><ul>${x.conditional_triggers.map(o=>`<li>${esc(o)}</li>`).join("")}</ul>`:""}
-  <div class="note">id ${esc(id)}</div></div>`}).join("");
- const rows=Object.entries(SC.agents||{});
- $("podScore").innerHTML=`<tr><th>Agent</th><th>Logged</th><th>Graded</th><th>Win %</th><th>Avg R</th><th>Brier</th><th>w: SG/Back</th><th>w: +G/Cont</th><th>w: &lt;200</th><th>Eff. weight</th></tr>`+
-  rows.map(([id,a])=>{const rw=a.regime_weights||{},f=v=>v==null?"—":n(v,2);return `<tr><td>${esc(a.name)}</td><td>${a.signals_logged??0}</td><td>${a.graded_count??0}</td><td>${a.win_rate==null?"—":n(a.win_rate*100,0)+"%"}</td><td>${f(a.avg_realized_r)}</td><td>${f(a.brier_score)}</td><td>${f(rw.short_gamma_backwardation)}</td><td>${f(rw.positive_gamma_contango)}</td><td>${f(rw.below_200sma)}</td><td>${a.current_effective_weight==null?"—":n(a.current_effective_weight*100,1)+"%"}</td></tr>`}).join("");
- $("podScoreNote").textContent=(SC.method||"")+(SC.active_regime_tags?` Active regime: ${SC.active_regime_tags.join(", ")}.`:"");
- const bl=POD.blot||[];
- $("podBlot").innerHTML=`<tr><th>Ticket</th><th>Tag</th><th>Symbol</th><th>Side × Qty</th><th>Entry / Stop</th><th>T1 / T2</th><th>$ Risk</th><th>Time stop</th><th>Verdict</th></tr>`+
-  (bl.length?bl.map(t=>`<tr><td>${esc(t.ticket_id)}</td><td>${esc(t.tag)}</td><td>${esc(t.symbol)} ${esc(t.instrument)}</td><td>${esc(t.direction)} × ${t.quantity}</td><td>${t.entry} / ${t.stop}</td><td>${t.target1} / ${t.target2}</td><td>$${n(t.actual_dollar_risk)} (${t.risk_pct_effective}%)</td><td>${esc(t.time_stop||"—")}</td><td class="${t.verdict==="APPROVED_FOR_STAGING"?"pos":"neg"}">${esc(t.verdict)}</td></tr>`).join(""):`<tr><td colspan="9" class="mut">No paper tickets yet.</td></tr>`);
- if(!$("cVix").value&&m.vix!=null)$("cVix").value=m.vix;if(!$("cRef").value&&m.spy_close!=null)$("cRef").value=m.spy_close;calcTicket()}
-function calcTicket(){const v=id=>{const x=$(id).value;return x===""?null:+x};const ins=$("cIns").value,opt=ins!=="stock",dir=opt?"long":$("cDir").value,mult=opt?100:1;
- const eq=v("cEq")||0,req=v("cRisk")||0,en=v("cEn"),stp=v("cSt"),vix=v("cVix"),dd=$("cDd").checked,ref=v("cRef"),ts=$("cTs").value.trim(),minRR=$("cAg").value==="ptj"?5:3;
- const m=POD?.state?.market||{},sg=dir==="long"?1:-1,chk=[];
- const inv=en!=null&&stp!=null&&sg*(en-stp)>0;chk.push([inv,"Hard invalidation present & correct side",inv?"":"stop missing or on wrong side"]);
- const r=inv?Math.abs(en-stp):null,t1=v("cT1")??(r?en+sg*3*r:null),t2=v("cT2")??(r?en+sg*5*r:null);
- const best=r?Math.max(...[t1,t2].filter(x=>x!=null).map(t=>sg*(t-en)/r)):null;chk.push([best!=null&&best>=minRR-1e-9,`Asymmetry ≥ ${minRR}R`,best!=null?n(best,2)+"R":""]);
- let eff=Math.min(req,1);chk.push([req<=1,"Risk % ≤ 1.0% cap",`requested ${req}% → ${eff}%`]);
- const th=[];if(dd)th.push("drawdown");if(vix!=null&&vix>25)th.push(`VIX ${vix} > 25`);const ceoAdj=window.CEO_CAP!=null&&+$("cRisk").value===window.CEO_CAP;if(th.length&&!ceoAdj)eff/=2;chk.push([true,"Vol-regime / drawdown throttle applied",ceoAdj?`CEO-approved cap ${window.CEO_CAP}% (already vol-adjusted)`:th.length?"halved: "+th.join(", "):"not required"]);
- let lo=m.put_wall_0dte,hi=m.call_wall_0dte,nml=false;if(ref!=null&&lo&&hi){const w=hi-lo;nml=ref>lo+.3*w&&ref<hi-.3*w}chk.push([!nml,"Not mid-range no-man's-land vs 0DTE walls",`SPY ${ref??"—"} vs ${lo}/${hi}`]);
- const tsOk=!!ts||!opt;chk.push([tsOk,"Time stop defined (mandatory for options)",ts||"—"]);
- const bud=eq*eff/100,qty=r?Math.floor(bud/(r*mult)):0,ok=chk.every(c=>c[0])&&qty>=1;
- $("cOut").innerHTML=`<div class="verdict ${ok?"pos":"neg"}">${ok?"✅ APPROVED FOR STAGING":"⛔ BLOCKED"} — ${dir.toUpperCase()} ${qty} ${opt?"contract(s)":"share(s)"} @ ${en??"—"} · stop ${stp??"—"}</div>
- <div class="row" style="gap:6px;margin:6px 0"><span class="pill">Risk ${n(eff,3)}% = $${n(bud)} budget</span><span class="pill">Actual risk $${r?n(qty*r*mult):"0.00"}</span><span class="pill">Notional $${en!=null?n(qty*en*mult):"—"}</span>
- <span class="pill pos">T1 ${t1!=null?n(t1):"—"}</span><span class="pill pos">T2 ${t2!=null?n(t2):"—"}</span><span class="pill">OCO: 50% @T1, trail to entry, 50% @T2</span></div>
- <ul class="fw">${chk.map((c,i)=>`<li>${c[0]?"✅":"❌"} ${i+1}. ${c[1]} <span class="mut">${esc(c[2])}</span></li>`).join("")}${r&&qty<1?'<li>⚠️ Rounds to 0 units at this budget.</li>':""}</ul>`}
-["cEq","cRisk","cIns","cDir","cAg","cEn","cSt","cT1","cT2","cRef","cTs","cVix","cDd"].forEach(id=>{$(id).addEventListener("input",calcTicket);$(id).addEventListener("change",calcTicket)});
-
-// ---------- Tab 1: Briefings & Team Memos (reads pod/memos_index.json) ----------
-const BR={idx:null,role:"cio",run:null,raw:false,txt:"",cache:{}};
-const BR_ROLES=[["cio","CIO Executive Briefing","🛡️"],["ptj","PTJ Macro & Regime","🌐"],["intraday","Intraday Tape & Gamma","⚡"],["buffett","Buffett Value","🏛️"],["gamma_data","SPY Gamma Data (.md)","📡"]];
-async function loadBriefings(force){const keepRole=BR.role||"cio",keepRun=BR.run;
- if(BR.idx&&!force)return BR.idx;
- try{const idx=await getPodJSON("pod/memos_index.json");if(idx)BR.idx=idx;else if(!BR.idx)BR.idx={memos:[],count:0,by_run:[]}}catch(e){if(!BR.idx)BR.idx={memos:[]}}
- try{const st=await getPodJSON("pod/signals/latest_pod_state.json");if(st)BR.state=st}catch(e){}
- if(POD_PRIVATE){$("brIdxNote").textContent="pod/ private on public archive";$("brStrip").innerHTML="";$("brBody").innerHTML='<div class="note">🔒 Briefings live under <code>pod/</code> (gitignored on GitHub Pages). Open locally to read CIO/specialist memos.</div>';drawBrPills();return BR.idx}
- const runs=BR.idx.by_run||[];
- const latestRun=runs[0]?.run_id||null;
- if(!keepRun||!runs.some(r=>r.run_id===keepRun))BR.run=latestRun;else BR.run=keepRun;
- $("brRun").innerHTML=runs.map(r=>`<option value="${esc(r.run_id)}"${r.run_id===BR.run?" selected":""}>${esc(r.display_ct)} (${Object.keys(r.memos||{}).length} memos)</option>`).join("")||"<option>No memos yet</option>";
- $("brIdxNote").textContent=BR.idx.generated_ct?`${BR.idx.count} memos indexed · updated ${BR.idx.generated_ct.replace("T"," ").slice(0,16)} CT`:"";
- drawBrPills();drawBrStrip();
- const role=keepRole||"cio";
- if(force&&BR.run===latestRun){const m=brMemo(role);if(m&&m.path)delete BR.cache[m.path]}
- await openMemo(role);
- return BR.idx}
-function brMemo(role,run){const ms=BR.idx.memos||[];return ms.find(m=>m.role===role&&m.run_id===(run??BR.run))||ms.find(m=>m.role===role)}
-function drawBrPills(){const c=r=>(BR.idx.memos||[]).filter(m=>m.role===r).length;
- $("brPills").innerHTML=BR_ROLES.map(([r,l,i])=>`<button data-role="${r}" class="${r===BR.role?"on":""}"><span>${i} ${l}</span><span class="ct">${c(r)}</span></button>`).join("")}
-function drawBrStrip(){const S=BR.state||{},A=S.agents||{},cs=S.cio_synthesis||{};const ids={ptj:"05895e3e-1c82-4cec-9ff3-07aa73b5c0db",intraday:"ee33b632-6c42-4d43-bf17-665bc939db17",buffett:"e44fa805-3796-4f84-8366-30901208f4ab"};
- const card=(r,lab,stance,txt)=>`<div class="card ${r}"><div class="lab">${lab}</div><div class="sv">${esc(stance||"—")}</div><div class="note" style="margin:0 0 8px">${esc((txt||"").slice(0,150))}${(txt||"").length>150?"…":""}</div><button data-read="${r}">Read memo →</button></div>`;
- $("brStrip").innerHTML=card("cio","🛡️ CIO Throttle",`Risk ${(cs.risk_throttle_pct||[0.25,0.5]).join("%–")}% per idea`,cs.summary)+
-  ["ptj","intraday","buffett"].map(r=>{const a=A[ids[r]]||{};return card(r,BR_ROLES.find(x=>x[0]===r)[2]+" "+BR_ROLES.find(x=>x[0]===r)[1],a.stance||a.primary_bias,a.headline)}).join("")}
-async function openMemo(role){BR.role=role;drawBrPills();const m=brMemo(role);
- if(!m){$("brTitle").textContent="No memo yet for this desk";$("brMeta").textContent="";$("brBody").innerHTML='<div class="note">Nothing filed for this run yet.</div>';return}
- $("brTitle").textContent=m.title;$("brMeta").innerHTML=`${esc(m.agent_name)} · ${esc(m.display_ct)} · <a href="${esc(m.path)}" target="_blank" rel="noopener">${esc(m.path)}</a>`;
- $("brBody").textContent="Loading…";
- try{if(!BR.cache[m.path]){const r=await fetch(cacheBust(m.path),{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);BR.cache[m.path]=await r.text()}BR.txt=BR.cache[m.path];drawBrBody()}
- catch(e){$("brBody").innerHTML=`<div class="note">Could not load ${esc(m.path)} (${esc(e.message)})</div>`}}
-function drawBrBody(){const b=$("brBody");if(BR.raw||typeof marked==="undefined")b.innerHTML="<pre>"+esc(BR.txt)+"</pre>";
- else{b.innerHTML=marked.parse(BR.txt);b.querySelectorAll("a").forEach(a=>{a.target="_blank";a.rel="noopener"})}
- $("brFmt").classList.toggle("on",!BR.raw);$("brRaw").classList.toggle("on",BR.raw)}
-$("brPills").onclick=e=>{const b=e.target.closest("button[data-role]");if(b)openMemo(b.dataset.role)};
-$("brStrip").onclick=e=>{const b=e.target.closest("button[data-read]");if(b){openMemo(b.dataset.read);$("brBody").scrollIntoView({behavior:"smooth",block:"nearest"})}};
-$("brRun").onchange=()=>{BR.run=$("brRun").value;openMemo(BR.role)};
-$("brFmt").onclick=()=>{BR.raw=false;drawBrBody()};$("brRaw").onclick=()=>{BR.raw=true;drawBrBody()};
-$("brCopy").onclick=async()=>{try{await navigator.clipboard.writeText(BR.txt);$("brCopy").textContent="✓ Copied"}catch(e){BR.raw=true;drawBrBody();$("brCopy").textContent="Select text"}setTimeout(()=>$("brCopy").textContent="📋 Copy",1500)};
-$("qbBrief").onclick=()=>{showTab("briefings");history.replaceState(null,"","#briefings");$("tabs").scrollIntoView({behavior:"smooth"})};
-loadBriefings();
-
-// ---------- CEO Decisions & Questions slot ----------
-const CQ={q:null,d:null,resp:{},note:"",LS:"horsey_ceo_decisions",PAT:"horsey_gh_pat",REPO:"brahaymin/horsey",CIO:"7ad52fe7-3d09-4438-bfa9-552a13aef8b6"};
-async function loadCeoQ(force){const g=async u=>{try{return await getPodJSON(u)}catch(e){return null}};
- const prevId=CQ.q?.prompt_set_id,prevStatus=CQ.q?.status,unsaved=$("ceoMsg")&&/Unsaved/.test($("ceoMsg").textContent||"");
- const keepResp=unsaved?JSON.parse(JSON.stringify(CQ.resp||{})):null;
- const keepNote=unsaved?($("ceoNote")?.value||CQ.note||""):null;
- [CQ.q,CQ.d]=await Promise.all([g("pod/ceo_questions.json"),g("pod/ceo_decisions/latest_decisions.json")]);
- if(!CQ.q){$("ceoQ").style.display="none";if(POD_PRIVATE&&$("ceoQStatus"))$("ceoQStatus").textContent="pod/ private";return null}
- $("ceoQ").style.display="";
- let local=null;try{local=JSON.parse(localStorage.getItem(CQ.LS)||"null")}catch(e){}
- const same=x=>x&&x.prompt_set_id===CQ.q.prompt_set_id;
- const remote=same(CQ.d)&&CQ.d.responses&&Object.keys(CQ.d.responses).length?CQ.d:null;
- const src=[remote,same(local)?local:null].filter(Boolean).sort((a,b)=>String(b.submitted_ct||b.saved_ct||"").localeCompare(String(a.submitted_ct||a.saved_ct||"")))[0];
- if(keepResp&&prevId===CQ.q.prompt_set_id){CQ.resp=keepResp;CQ.note=keepNote||"";if($("ceoNote"))$("ceoNote").value=CQ.note;CQ.answered=!!src}
- else{CQ.resp={};CQ.q.questions.forEach(q=>{const v=src?.responses?.[q.id];CQ.resp[q.id]=v!==undefined?v:(Array.isArray(q.default)?[...q.default]:q.default)});
-  CQ.note=src?.ceo_note||"";$("ceoNote").value=CQ.note;CQ.answered=!!src}
- $("ceoQMeta").innerHTML=`Set <code>${esc(CQ.q.prompt_set_id)}</code> · for session ${esc(CQ.q.session_target)} · from <a href="#" id="ceoBrLink">CIO briefing</a>`+(src?` · last answer ${esc((src.submitted_ct||src.saved_ct||"").replace("T"," ").slice(0,16))} CT (${remote===src?"pod repo":"this browser"})`:"");
- const brLink=$("ceoBrLink");if(brLink)brLink.onclick=e=>{e.preventDefault();openMemo("cio")};
- drawCeoQ();updCeoBadge();syncRisk();
- return {changed:prevId!==CQ.q.prompt_set_id||prevStatus!==CQ.q.status,prompt_set_id:CQ.q.prompt_set_id,status:CQ.q.status}}
-function drawCeoQ(){$("ceoQList").innerHTML=CQ.q.questions.map(q=>{const v=CQ.resp[q.id],sel=o=>Array.isArray(v)?v.includes(o.value):v===o.value;
- return `<div class="qq" data-q="${esc(q.id)}"><div class="qt">${esc(q.title)}</div><div class="qd">${esc(q.detail||"")}</div>${q.type==="text"?`<textarea data-text="${esc(q.id)}">${esc(v||"")}</textarea>`:
- `<div class="opts" role="${q.type==="multi"?"group":"radiogroup"}">${q.options.map(o=>`<button type="button" data-v="${esc(o.value)}" class="${sel(o)?"on":""}" aria-pressed="${sel(o)}">${esc(o.label)}</button>`).join("")}</div>`}</div>`}).join("")}
-$("ceoQList").addEventListener("click",e=>{const b=e.target.closest("button[data-v]");if(!b)return;const qid=b.closest(".qq").dataset.q,q=CQ.q.questions.find(x=>x.id===qid),v=b.dataset.v;
- if(q.type==="multi"){const ex=new Set(q.options.filter(o=>o.exclusive||o.value==="veto_all").map(o=>o.value));let cur=Array.isArray(CQ.resp[qid])?[...CQ.resp[qid]]:[];
-  if(cur.includes(v))cur=cur.filter(x=>x!==v);else cur=ex.has(v)?[v]:[...cur.filter(x=>!ex.has(x)),v];CQ.resp[qid]=cur}
- else CQ.resp[qid]=v;drawCeoQ();syncRisk();$("ceoMsg").innerHTML='<span class="qwarn">Unsaved changes</span>'});
-$("ceoQList").addEventListener("input",e=>{const t=e.target.closest("textarea[data-text]");if(t)CQ.resp[t.dataset.text]=t.value});
-function riskPct(){for(const q of CQ.q?.questions||[]){const o=q.options?.find(o=>o.value===CQ.resp[q.id]&&o.risk_pct!=null);if(o)return o.risk_pct}return null}
-function syncRisk(){const r=riskPct();if(r==null||!$("cRisk"))return;window.CEO_CAP=r;$("cRisk").value=r;if(typeof calcTicket==="function")calcTicket()}
-function updCeoBadge(){const open=CQ.q&&CQ.q.status==="awaiting_ceo"&&!CQ.answered?CQ.q.questions.length:0;
- $("qbBrief").innerHTML="📋 CEO Briefing"+(open?` · ${open} Open Qs`:"");const tb=$("tabs").querySelector('[data-tab="briefings"]');tb.innerHTML="1. Briefings &amp; Team Memos"+(open?`<span class="qbadge">${open}</span>`:"");
- $("ceoQStatus").textContent=open?`${open} open — awaiting CEO`:"✓ answered";$("ceoQStatus").style.color=open?"var(--warn)":"var(--pos)"}
-function ctNow(){const d=new Date(),p=Object.fromEntries(new Intl.DateTimeFormat("en-US",{timeZone:"America/Chicago",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23",timeZoneName:"longOffset"}).formatToParts(d).map(x=>[x.type,x.value]));
- const off=(p.timeZoneName||"GMT-06:00").replace("GMT","").replace(":","")||"-0600";return{iso:`${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}${off}`,stamp:`${p.year}-${p.month}-${p.day}_${p.hour}${p.minute}`}}
-function ceoPayload(){const t=ctNow();return{prompt_set_id:CQ.q.prompt_set_id,status:"submitted",submitted_ct:t.iso,saved_ct:t.iso,session_target:CQ.q.session_target,briefing_ref:CQ.q.briefing_ref,responses:JSON.parse(JSON.stringify(CQ.resp)),risk_pct:riskPct(),ceo_note:$("ceoNote").value.trim(),source:"horsey web app"}}
-function ceoSummary(p){const L=[`CEO DECISIONS — ${p.prompt_set_id} (session ${p.session_target}) · ${p.submitted_ct} CT`];
- CQ.q.questions.forEach(q=>{const v=p.responses[q.id],vs=Array.isArray(v)?v:[v];L.push(`• ${q.title}: ${vs.map(x=>(q.options||[]).find(o=>o.value===x)?.label||x).join("; ")||"—"}`)});
- if(p.ceo_note)L.push(`• CEO note: ${p.ceo_note}`);L.push("Please record these in pod/ceo_decisions/latest_decisions.json and apply to Friday's tickets.");return L.join("\n")}
-const b64=str=>btoa(unescape(encodeURIComponent(str)));
-async function ghPut(path,content,msg,pat,isNew){const u=`https://api.github.com/repos/${CQ.REPO}/contents/${path}`,h={Authorization:`Bearer ${pat}`,Accept:"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28"};
- let sha;if(!isNew){const g=await fetch(u+"?ref=main",{headers:h,cache:"no-store"});if(g.ok)sha=(await g.json()).sha;else if(g.status!==404)throw new Error(`GET ${g.status}`)}
- const r=await fetch(u,{method:"PUT",headers:{...h,"Content-Type":"application/json"},body:JSON.stringify({message:msg,content:b64(content),branch:"main",...(sha?{sha}:{})})});
- if(!r.ok)throw new Error(`PUT ${r.status} ${(await r.json().catch(()=>({}))).message||""}`);return(await r.json()).commit?.sha}
-$("ceoSave").onclick=async()=>{const p=ceoPayload();localStorage.setItem(CQ.LS,JSON.stringify(p));CQ.answered=true;CQ.last=p;updCeoBadge();
- const t=new Date().toLocaleTimeString("en-US",{timeZone:"America/Chicago",hour:"numeric",minute:"2-digit"});$("ceoMsg").innerHTML=`<span class="qok">✓ Saved locally ${t} CT</span>`;
- const pat=localStorage.getItem(CQ.PAT);if(!pat){$("ceoAlt").style.display="flex";$("ceoMsg").innerHTML+=` · <span class="qwarn">Not yet in pod repo — send to CIO below or connect 1-click sync.</span>`;return}
- $("ceoMsg").innerHTML+=" · syncing…";try{const js=JSON.stringify(p,null,2)+"\n",st=ctNow().stamp;
-  await ghPut(`pod/ceo_decisions/${st}_ceo_decision.json`,js,`CEO decision ${p.prompt_set_id} ${st} CT`,pat,true);
-  const c=await ghPut("pod/ceo_decisions/latest_decisions.json",js,`CEO decisions (latest) ${p.prompt_set_id}`,pat);
-  $("ceoMsg").innerHTML=`<span class="qok">✓ Saved locally ${t} CT · ✓ Synced to Pod Repo (commit ${String(c||"").slice(0,7)})</span>`;$("ceoAlt").style.display="none"}
- catch(e){$("ceoAlt").style.display="flex";$("ceoMsg").innerHTML=`<span class="qok">✓ Saved locally ${t} CT</span> · <span class="neg">GitHub sync failed (${esc(e.message)}) — check token or use Copy &amp; Open CIO.</span>`}};
-$("ceoCopy").onclick=async()=>{const p=CQ.last||ceoPayload(),txt=ceoSummary(p);try{await navigator.clipboard.writeText(txt);$("ceoMsg").innerHTML='<span class="qok">✓ Copied — paste into the CIO chat and send.</span>'}catch(e){prompt("Copy this and paste to the CIO:",txt)}
- location.href=`grokbot://app/v1/agent?id=${CQ.CIO}`};
-const togSync=()=>{const b=$("ceoSync");b.style.display=b.style.display==="none"?"block":"none";$("ceoPatMsg").textContent=localStorage.getItem(CQ.PAT)?"Token saved in this browser ✓":"No token saved";};
-$("ceoSyncBtn").onclick=togSync;$("ceoConnect").onclick=()=>{$("ceoSync").style.display="none";togSync();$("ceoPat").focus()};
-$("ceoPatSave").onclick=()=>{const v=$("ceoPat").value.trim();if(!v)return;localStorage.setItem(CQ.PAT,v);$("ceoPat").value="";$("ceoPatMsg").textContent="Token saved in this browser ✓ — next Save pushes directly."};
-$("ceoPatClear").onclick=()=>{localStorage.removeItem(CQ.PAT);$("ceoPatMsg").textContent="Token removed."};
-
-loadCeoQ();
-
-// ---------- LiveHub: unified multi-channel refresh + toast banners ----------
-const LiveHub = (()=>{
-  const LS_TOAST="horsey_live_toast", LS_HIST="horsey_live_hist";
-  let prefs={dismissSec:14, browserNote:false};
-  let fp={snapId:null, memosKey:null, podStateKey:null, ceoQKey:null, blotterKey:null, decisionsKey:null};
-  let booted=false, history=[], paused=false;
-  const host=()=>$("liveToastHost");
-
-  function loadPrefs(){try{Object.assign(prefs, JSON.parse(localStorage.getItem(LS_TOAST)||"{}"))}catch(e){}
-    try{history=JSON.parse(localStorage.getItem(LS_HIST)||"[]");if(!Array.isArray(history))history=[]}catch(e){history=[]}
-    renderBell()}
-  function saveHist(){try{localStorage.setItem(LS_HIST,JSON.stringify(history.slice(0,5)))}catch(e){} renderBell()}
-  function ctStamp(d){return (d||new Date()).toLocaleString("en-US",{timeZone:"America/Chicago",month:"short",day:"numeric",hour:"numeric",minute:"2-digit",second:"2-digit"})+" CT"}
-  function fmtB(v){if(v==null||isNaN(v))return "—";const a=Math.abs(v);const s=v<0?"-":"";return a>=1e9?s+"$"+(a/1e9).toFixed(2)+"B":a>=1e6?s+"$"+(a/1e6).toFixed(1)+"M":s+"$"+a.toFixed(0)}
-  function fmtPct(v){if(v==null||isNaN(v))return "—";return (v>0?"+":"")+Number(v).toFixed(2)+"%"}
-
-  function renderBell(){
-    const btn=$("bellBtn"), cnt=$("bellCnt"), list=$("bellList"), pill=$("lastUpPill");
-    if(!btn)return;
-    const n=history.length; btn.classList.toggle("has", n>0); if(cnt)cnt.textContent=String(n);
-    if(pill){if(n){pill.classList.add("show");pill.innerHTML="🔔 Last update <b>"+esc((history[0].title||"").slice(0,28))+"</b>"}else pill.classList.remove("show")}
-    if(!list)return;
-    if(!n){list.className="empty";list.textContent="No updates yet — alerts appear when new snapshots, briefings, or tickets land.";return}
-    list.className="";
-    list.innerHTML=history.map((h,i)=>`<div class="bi" data-i="${i}"><div class="t">${esc(h.badge||"UPDATE")} · ${esc(h.title)}</div><div class="s">${esc(h.summary||"")}<br>${esc(h.when||"")}</div></div>`).join("");
-  }
-
-  function pushHist(item){
-    history.unshift({id:item.id||("h"+Date.now()), badge:item.badge, title:item.title, summary:item.summary, when:item.when||ctStamp(), kind:item.kind, action:item.action||null, actionLabel:item.actionLabel||null});
-    history=history.slice(0,5); saveHist();
-  }
-
-  function maybeBrowserNotify(item){
-    if(!prefs.browserNote||typeof Notification==="undefined")return;
-    const go=()=>{try{new Notification(item.title,{body:item.summary||"", tag:item.id||"horsey-live"})}catch(e){}};
-    if(Notification.permission==="granted")go();
-    else if(Notification.permission!=="denied")Notification.requestPermission().then(p=>{if(p==="granted")go()});
-  }
-
-  function showBanner(item){
-    if(!booted && !item.force){ pushHist(item); return; } // baseline path shouldn't toast, but test/force can
-    const el=document.createElement("div");
-    el.className="live-banner kind-"+(item.kind||"market");
-    el.setAttribute("role","status");
-    const aid="lb"+Date.now()+Math.floor(Math.random()*999);
-    el.dataset.id=aid;
-    const sec=Math.max(5, +prefs.dismissSec||14);
-    el.innerHTML=`<div class="lb-top"><div class="lb-ico">${item.icon||"📡"}</div><div class="lb-body">
-      <div class="lb-badge"><span class="pulse"></span>${esc(item.badge||"UPDATE")}</div>
-      <div class="lb-title">${esc(item.title||"Update")}</div>
-      <div class="lb-sum">${esc(item.summary||"")}</div>
-      <div class="lb-time">${esc(item.when||ctStamp())}</div>
-      <div class="lb-actions">
-        ${item.actionLabel?`<button type="button" class="primary" data-act="1">${esc(item.actionLabel)}</button>`:""}
-        <button type="button" data-dismiss="1">Dismiss ✕</button>
-      </div></div>
-      <button type="button" class="lb-x" data-dismiss="1" aria-label="Dismiss">✕</button></div>
-      <div class="lb-bar"><i style="animation:lbShrink ${sec}s linear forwards"></i></div>`;
-    // inject keyframes once
-    if(!document.getElementById("lbShrinkStyle")){
-      const st=document.createElement("style"); st.id="lbShrinkStyle";
-      st.textContent="@keyframes lbShrink{from{transform:scaleX(1)}to{transform:scaleX(0)}}";
-      document.head.appendChild(st);
+function bytesToB64(bytes){
+  let s = "";
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  for (let i=0;i<u8.length;i++) s += String.fromCharCode(u8[i]);
+  return btoa(s);
+}
+async function deriveKey(password, saltBytes, iter){
+  const enc = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name:"PBKDF2", salt: saltBytes, iterations: iter||600000, hash:"SHA-256" },
+    baseKey,
+    { name:"AES-GCM", length:256 },
+    true,
+    ["encrypt","decrypt"]
+  );
+}
+async function importRawKey(b64){
+  return crypto.subtle.importKey("raw", b64ToBytes(b64), { name:"AES-GCM" }, true, ["encrypt","decrypt"]);
+}
+async function exportRawKey(key){
+  return bytesToB64(new Uint8Array(await crypto.subtle.exportKey("raw", key)));
+}
+async function decryptEnvelope(key, env){
+  const iv = b64ToBytes(env.iv);
+  const ct = b64ToBytes(env.ct); // ciphertext || tag
+  const pt = await crypto.subtle.decrypt({ name:"AES-GCM", iv }, key, ct);
+  return new TextDecoder().decode(pt);
+}
+function guessType(path){
+  if (path.endsWith(".json") || path.endsWith(".jsonl")) return "application/json; charset=utf-8";
+  if (path.endsWith(".md")) return "text/markdown; charset=utf-8";
+  if (path.endsWith(".csv")) return "text/csv; charset=utf-8";
+  if (path.endsWith(".js")) return "text/javascript; charset=utf-8";
+  if (path.endsWith(".html")) return "text/html; charset=utf-8";
+  return "text/plain; charset=utf-8";
+}
+function normalizePath(url){
+  try {
+    const u = (typeof url === "string") ? new URL(url, location.href) : new URL(url.url, location.href);
+    if (u.origin !== location.origin) return null; // external
+    let path = u.pathname.replace(/^\.\//,"");
+    // strip leading /repo base if GitHub Pages project site
+    const base = location.pathname.replace(/\/[^/]*$/, "/"); // directory of index
+    if (path.startsWith(base)) path = path.slice(base.length);
+    path = path.replace(/^\/+/, "");
+    return path;
+  } catch(e){ return null; }
+}
+async function refreshStateIfNeeded(force){
+  const now = Date.now();
+  if (!force && now - stateRefreshAt < STATE_REFRESH_MS) return;
+  if (!activeKey) return;
+  stateRefreshAt = now;
+  try {
+    const r = await nativeFetch(STATE_URL + "?_cb=" + now, { cache:"no-store" });
+    if (!r.ok) return;
+    const env = await r.json();
+    const txt = await decryptEnvelope(activeKey, env);
+    const payload = JSON.parse(txt);
+    if (payload && payload.files) Object.assign(VAULT_FILES, payload.files);
+  } catch(e){ /* keep previous map */ }
+}
+function installFetchWrapper(){
+  window.fetch = async function(input, init){
+    try {
+      const path = normalizePath(input);
+      if (path == null) return nativeFetch(input, init); // external (Alpaca etc.)
+      // allow vault ciphertext itself through
+      if (path.startsWith("vault/")) return nativeFetch(input, init);
+      // cache-bust → maybe refresh state
+      const href = (typeof input === "string") ? input : (input && input.url) || "";
+      if (/[?&]_cb=/.test(href) || /[?&]t=/.test(href)) await refreshStateIfNeeded(false);
+      if (Object.prototype.hasOwnProperty.call(VAULT_FILES, path)) {
+        let body = VAULT_FILES[path];
+        if (typeof body !== "string") body = JSON.stringify(body);
+        return new Response(body, { status:200, headers:{ "Content-Type": guessType(path), "X-Horsey-Vault":"1" }});
+      }
+      // try without leading ./ variants already normalized; 404 soft
+      return new Response(JSON.stringify({ error:"not_in_vault", path }), { status:404, headers:{ "Content-Type":"application/json" }});
+    } catch(e) {
+      return nativeFetch(input, init);
     }
-    const h=host(); if(!h)return;
-    h.appendChild(el);
-    pushHist(item); maybeBrowserNotify(item);
+  };
+}
+function patchHtml(html){
+  // Ensure lock button exists near bell
+  if (!/id="vaultLockBtn"/.test(html)) {
+    html = html.replace(
+      /(<button class="bellbtn" id="bellBtn")/,
+      '<button type="button" class="bellbtn" id="vaultLockBtn" title="Lock vault" aria-label="Lock">🔒</button>\n $1'
+    );
+  }
+  // Inject tiny boot that wires Lock click after DOM ready
+  const boot = `<script>(function(){function wire(){var b=document.getElementById("vaultLockBtn");if(!b)return;b.onclick=function(){try{localStorage.removeItem("${DK_LS}");sessionStorage.removeItem("${DK_LS}");localStorage.removeItem("${META_LS}");}catch(e){}location.reload();};}if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",wire);else wire();})();<\/script>`;
+  if (html.includes("</body>")) html = html.replace("</body>", boot + "</body>");
+  else html += boot;
+  return html;
+}
+async function mountApp(appPayload){
+  const html = patchHtml(appPayload.html || "");
+  // Merge any app.files into VAULT_FILES (e.g. feed-adapter already inlined, but keep map)
+  if (appPayload.files) Object.assign(VAULT_FILES, appPayload.files);
+  installFetchWrapper();
+  document.open();
+  document.write(html);
+  document.close();
+}
+async function unlockWithPassword(password, remember){
+  const appEnv = await (await nativeFetch(APP_URL + "?_cb=" + Date.now(), { cache:"no-store" })).json();
+  const stateEnv = await (await nativeFetch(STATE_URL + "?_cb=" + Date.now(), { cache:"no-store" })).json();
+  const salt = b64ToBytes(appEnv.salt);
+  const iter = appEnv.iter || 600000;
+  const key = await deriveKey(password, salt, iter);
+  let appTxt, stateTxt;
+  try {
+    appTxt = await decryptEnvelope(key, appEnv);
+    stateTxt = await decryptEnvelope(key, stateEnv);
+  } catch (e) {
+    throw new Error("Incorrect password. Please try again.");
+  }
+  const appPayload = JSON.parse(appTxt);
+  const statePayload = JSON.parse(stateTxt);
+  VAULT_FILES = Object.assign(Object.create(null), statePayload.files || {});
+  activeKey = key;
+  activeSaltB64 = appEnv.salt;
+  stateRefreshAt = Date.now();
+  const raw = await exportRawKey(key);
+  const store = remember ? localStorage : sessionStorage;
+  const other = remember ? sessionStorage : localStorage;
+  try {
+    other.removeItem(DK_LS); other.removeItem(META_LS);
+    store.setItem(DK_LS, raw);
+    store.setItem(META_LS, JSON.stringify({ salt: appEnv.salt, iter }));
+  } catch(e){}
+  await mountApp(appPayload);
+}
+async function tryAutoUnlock(){
+  let raw = null, meta = null;
+  try { raw = localStorage.getItem(DK_LS); meta = JSON.parse(localStorage.getItem(META_LS)||"null"); } catch(e){}
+  if (!raw) {
+    try { raw = sessionStorage.getItem(DK_LS); meta = JSON.parse(sessionStorage.getItem(META_LS)||"null"); } catch(e){}
+  }
+  if (!raw || !meta || !meta.salt) return false;
+  try {
+    const key = await importRawKey(raw);
+    const appEnv = await (await nativeFetch(APP_URL + "?_cb=" + Date.now(), { cache:"no-store" })).json();
+    if (appEnv.salt !== meta.salt) return false;
+    const appTxt = await decryptEnvelope(key, appEnv);
+    const stateEnv = await (await nativeFetch(STATE_URL + "?_cb=" + Date.now(), { cache:"no-store" })).json();
+    const stateTxt = await decryptEnvelope(key, stateEnv);
+    VAULT_FILES = Object.assign(Object.create(null), JSON.parse(stateTxt).files || {});
+    activeKey = key; activeSaltB64 = meta.salt; stateRefreshAt = Date.now();
+    await mountApp(JSON.parse(appTxt));
+    return true;
+  } catch(e) {
+    try { localStorage.removeItem(DK_LS); sessionStorage.removeItem(DK_LS); } catch(_){}
+    return false;
+  }
+}
 
-    let remaining=sec*1000, started=Date.now(), timer=null, pausedLocal=false;
-    const clear=()=>{if(timer)clearTimeout(timer); timer=null; if(el.parentNode)el.remove()};
-    const arm=()=>{timer=setTimeout(clear, remaining)};
-    const pause=()=>{if(pausedLocal)return; pausedLocal=true; remaining-=Date.now()-started; if(timer)clearTimeout(timer); const bar=el.querySelector(".lb-bar>i"); if(bar)bar.style.animationPlayState="paused"};
-    const resume=()=>{if(!pausedLocal)return; pausedLocal=false; started=Date.now(); const bar=el.querySelector(".lb-bar>i"); if(bar)bar.style.animationPlayState="running"; arm()};
-    el.addEventListener("mouseenter", pause); el.addEventListener("mouseleave", resume);
-    el.addEventListener("touchstart", pause, {passive:true}); el.addEventListener("touchend", resume, {passive:true});
-    el.addEventListener("click", e=>{
-      if(e.target.closest("[data-dismiss]")){clear(); return}
-      if(e.target.closest("[data-act]") && typeof item.action==="function"){ try{item.action()}catch(err){console.error(err)} clear(); }
-    });
-    arm();
-    // keep only 3 visible
-    while(h.children.length>3)h.removeChild(h.firstChild);
+$("togglePass").onclick = () => {
+  const i = $("vaultPass");
+  const show = i.type === "password";
+  i.type = show ? "text" : "password";
+  $("togglePass").textContent = show ? "Hide" : "Show";
+};
+$("vaultForm").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  clearErr();
+  const password = $("vaultPass").value;
+  const remember = $("rememberDevice").checked;
+  if (!password) { showErr("Enter your password."); return; }
+  document.body.classList.add("busy");
+  $("unlockBtn").innerHTML = '<span class="spinner"></span>Unlocking…';
+  try {
+    await unlockWithPassword(password, remember);
+  } catch (e) {
+    showErr(e && e.message ? e.message : "Incorrect password. Please try again.");
+    document.body.classList.remove("busy");
+    $("unlockBtn").textContent = "Unlock Command Desk";
+    $("vaultPass").focus();
+    $("vaultPass").select();
   }
+});
 
-  function reopen(i){
-    const h=history[i]; if(!h)return;
-    showBanner({force:true, kind:h.kind||"market", icon:h.kind==="cio"?"🛡️":h.kind==="pod"?"⚡":h.kind==="ceo"?"📋":"📡",
-      badge:h.badge, title:h.title, summary:h.summary, when:h.when,
-      actionLabel:h.actionLabel, action:()=>{
-        if(h.kind==="cio"||h.kind==="ceo"){showTab("briefings");window.history.replaceState(null,"","#briefings");$("tabs").scrollIntoView({behavior:"smooth"});if(h.kind==="cio")openMemo("cio")}
-        else if(h.kind==="pod"){showTab("pod");window.history.replaceState(null,"","#pod");$("tabs").scrollIntoView({behavior:"smooth"})}
-        else {showTab("gamma");window.history.replaceState(null,"","#gamma")}
-      }});
-  }
-
-  function testBanner(){
-    showBanner({force:true, kind:"test", icon:"🔔", badge:"TEST ALERT", title:"Banner preview — phone & desktop",
-      summary:"SPY $733.00 (−4.41%) · VIX 28.18 · 0DTE GEX −$2.66B · Post-Close sample. Auto-dismiss pauses on hover/touch.",
-      actionLabel:"View Gamma", action:()=>{showTab("gamma");window.history.replaceState(null,"","#gamma");$("tabs").scrollIntoView({behavior:"smooth"})}});
-  }
-
-  function snapKey(meta){return meta&&meta.id?String(meta.id):null}
-  function memosFingerprint(idx){
-    if(!idx)return null;
-    const top=(idx.by_run&&idx.by_run[0]&&idx.by_run[0].run_id)||"";
-    return [idx.generated_ct||"", idx.count||0, top].join("|");
-  }
-  function podFingerprint(st){return st?(st.updated_ct||st.as_of_ct||"")+"|"+((st.cio_synthesis&&st.cio_synthesis.summary)||"").slice(0,80):null}
-  function blotFingerprint(rows){
-    if(!rows)return null;
-    const last=rows[rows.length-1]||{};
-    return rows.length+"|"+(last.ticket_id||"")+"|"+(last.verdict||"")+"|"+(last.created_ct||"");
-  }
-  function ceoFingerprint(q,d){
-    return [(q&&q.prompt_set_id)||"", (q&&q.status)||"", (d&&d.status)||"", (d&&d.submitted_ct)||""].join("|");
-  }
-
-  function deltaSummary(cur, prev){
-    if(!cur)return "New market snapshot available.";
-    const parts=[];
-    const spy=cur.spy_price, prevSpy=prev&&prev.spy_price;
-    const chg=cur.spy_1d_pct;
-    parts.push(`SPY $${spy!=null?Number(spy).toFixed(2):"—"}${chg!=null?" ("+fmtPct(chg)+")":""}`);
-    if(prevSpy!=null&&spy!=null){const d=spy-prevSpy; parts.push(`Δspot ${d>=0?"+":""}${d.toFixed(2)}`);}
-    if(cur.vix!=null){let s=`VIX ${Number(cur.vix).toFixed(2)}`; if(prev&&prev.vix!=null){const d=cur.vix-prev.vix;s+=` (${d>=0?"+":""}${d.toFixed(2)})`} parts.push(s)}
-    if(cur.net_gex_45d!=null){let s=`45D GEX ${fmtB(cur.net_gex_45d)}`; if(prev&&prev.net_gex_45d!=null){const d=cur.net_gex_45d-prev.net_gex_45d;s+=` (${d>=0?"+":""}${fmtB(d)})`} parts.push(s)}
-    // wall / 200-SMA crosses using index fields when present
-    const walls=[];
-    const px=spy, sma=null; // index may not have sma; check loaded S
-    try{const sum=(S&&S.summary)||{}; const sma200=sum.spy_sma_200; const pw=sum.put_wall_0dte||735; const cw=sum.call_wall_0dte||760;
-      if(prevSpy!=null&&px!=null&&sma200!=null){if(prevSpy>=sma200&&px<sma200)walls.push("broke below 200-SMA"); if(prevSpy<sma200&&px>=sma200)walls.push("reclaimed 200-SMA")}
-      if(prevSpy!=null&&px!=null){if(prevSpy>=pw&&px<pw)walls.push("broke $"+pw+" Put Wall"); if(prevSpy<pw&&px>=pw)walls.push("reclaimed $"+pw+" Put Wall");
-        if(prevSpy<=cw&&px>cw)walls.push("broke above $"+cw+" Call Wall")}
-    }catch(e){}
-    if(cur.run_tag)parts.push(String(cur.run_tag).replace(/_/g," "));
-    if(walls.length)parts.push("⚠ "+walls.join(", "));
-    return parts.join(" · ");
-  }
-
-  function onNewSnapshot(meta, prevMeta, autoLoaded){
-    if(!booted)return;
-    const title=autoLoaded?"New SPY / GEX Snapshot Loaded":"New SPY / GEX Snapshot Available";
-    const summary=deltaSummary(meta, prevMeta);
-    showBanner({kind:"market", icon:"📡", badge:"MARKET UPDATE", title, summary,
-      actionLabel:autoLoaded?"View Gamma":"Load Latest",
-      action:()=>{
-        if(!autoLoaded){load(0)}
-        showTab("gamma"); window.history.replaceState(null,"","#gamma"); $("tabs").scrollIntoView({behavior:"smooth"});
-      }});
-    if(meta&&meta.id)fp.snapId=meta.id;
-  }
-
-  async function checkMemos(){
-    let idx=null;
-    try{idx=await getJSON("pod/memos_index.json")}catch(e){return}
-    const key=memosFingerprint(idx);
-    if(fp.memosKey==null){fp.memosKey=key;return}
-    if(key===fp.memosKey)return;
-    const prev=fp.memosKey; fp.memosKey=key;
-    if(!booted)return;
-    const top=(idx.by_run&&idx.by_run[0])||{};
-    const cio=(idx.memos||[]).find(m=>m.role==="cio"&&m.run_id===top.run_id)||(idx.memos||[]).find(m=>m.role==="cio");
-    const isCio=!!cio && String(prev).split("|")[0]!==(idx.generated_ct||"");
-    await loadBriefings(true);
-    showBanner({kind:"cio", icon:"🛡️", badge:cio?"CIO BRIEFING":"POD MEMOS",
-      title:cio?("New CIO Briefing"+(cio.title?": "+cio.title.slice(0,60):"")):"New Pod Memos Filed",
-      summary:`${idx.count||0} memos · run ${top.display_ct||top.run_id||"—"}${idx.generated_ct?" · indexed "+String(idx.generated_ct).replace("T"," ").slice(0,16)+" CT":""}`,
-      actionLabel:"Read Briefing →",
-      action:()=>{showTab("briefings");window.history.replaceState(null,"","#briefings");$("tabs").scrollIntoView({behavior:"smooth"});openMemo("cio")}});
-  }
-
-  async function checkPodAndCeo(){
-    let state=null, blot=null, q=null, d=null;
-    try{[state, blot, q, d]=await Promise.all([
-      getJSON("pod/signals/latest_pod_state.json").catch(()=>null),
-      getTextCB("pod/ledger/paper_blotter.jsonl").then(t=>t.trim().split("\n").filter(Boolean).map(l=>{try{return JSON.parse(l)}catch(e){return null}}).filter(Boolean)).catch(()=>null),
-      getJSON("pod/ceo_questions.json").catch(()=>null),
-      getJSON("pod/ceo_decisions/latest_decisions.json").catch(()=>null)
-    ])}catch(e){return}
-
-    const pk=podFingerprint(state), bk=blotFingerprint(blot), ck=ceoFingerprint(q,d);
-    const first=fp.podStateKey==null;
-    const podChanged=!first && pk && pk!==fp.podStateKey;
-    const blotChanged=!first && bk && bk!==fp.blotterKey;
-    const ceoChanged=!first && ck && ck!==fp.ceoQKey;
-    if(pk)fp.podStateKey=pk; if(bk)fp.blotterKey=bk; if(ck)fp.ceoQKey=ck;
-    if(first||!booted)return;
-
-    if(podChanged||blotChanged){
-      await loadPod(true);
-      const last=(blot&&blot[blot.length-1])||{};
-      const staged=blotChanged && last && (last.status==="conditional_preapproved"||last.staged||last.verdict==="APPROVED_FOR_STAGING");
-      showBanner({kind:"pod", icon:"⚡", badge:staged?"TICKET / POD ALERT":"POD STATE",
-        title:staged?`Ticket ${last.ticket_id||"staged"}`:"Pod state updated",
-        summary:staged?`${last.symbol||""} ${last.direction||""} × ${last.quantity??"—"} · ${last.tag||last.setup_id||""} · ${last.verdict||last.status||""}`:((state&&state.cio_synthesis&&state.cio_synthesis.summary)||"latest_pod_state.json changed").slice(0,160),
-        actionLabel:"View Blotter →",
-        action:()=>{showTab("pod");window.history.replaceState(null,"","#pod");$("tabs").scrollIntoView({behavior:"smooth"})}});
-    }
-    if(ceoChanged){
-      await loadCeoQ(true);
-      const open=q && q.status!=="answered" && q.status!=="submitted";
-      showBanner({kind:"ceo", icon:"📋", badge:open?"CEO QUESTIONS":"CEO DECISIONS",
-        title:open?`New CEO question set: ${q.prompt_set_id||""}`:`CEO decisions updated: ${q&&q.prompt_set_id||""}`,
-        summary:open?`${(q.questions||[]).length} open · session ${q.session_target||"—"}`:`status ${q&&q.status||"—"} / decisions ${d&&d.status||"—"}`,
-        actionLabel:open?"Review Decisions →":"Open Briefings →",
-        action:()=>{showTab("briefings");window.history.replaceState(null,"","#briefings");$("tabs").scrollIntoView({behavior:"smooth"});const el=$("ceoQ");if(el)el.scrollIntoView({behavior:"smooth",block:"nearest"})}});
-    }
-  }
-
-  async function refreshChannels(reason){
-    try{await Promise.all([checkMemos(), checkPodAndCeo()])}catch(e){console.warn("[LiveHub]", e)}
-  }
-
-  async function baseline(){
-    // Capture fingerprints WITHOUT toasting
-    try{
-      const idx=IDX||await getJSON("snapshots/index.json").catch(()=>null);
-      fp.snapId=idx&&idx.snapshots&&idx.snapshots[0]&&idx.snapshots[0].id||null;
-    }catch(e){}
-    try{const mi=BR.idx||await getJSON("pod/memos_index.json"); fp.memosKey=memosFingerprint(mi)}catch(e){}
-    try{
-      const st=POD&&POD.state||await getJSON("pod/signals/latest_pod_state.json").catch(()=>null);
-      fp.podStateKey=podFingerprint(st);
-      let blot=POD&&POD.blot;
-      if(!blot){try{const t=await getTextCB("pod/ledger/paper_blotter.jsonl");blot=t.trim().split("\n").filter(Boolean).map(l=>{try{return JSON.parse(l)}catch(e){return null}}).filter(Boolean)}catch(e){blot=[]}}
-      fp.blotterKey=blotFingerprint(blot);
-    }catch(e){}
-    try{fp.ceoQKey=ceoFingerprint(CQ.q, CQ.d)}catch(e){}
-    booted=true;
-  }
-
-  function positionBellPop(){
-    const btn=$("bellBtn"), pop=$("bellPop");
-    if(!btn||!pop||!pop.classList.contains("open"))return;
-    const r=btn.getBoundingClientRect();
-    const vw=document.documentElement.clientWidth||window.innerWidth;
-    const vh=window.innerHeight;
-    if(vw<=620){
-      pop.style.left="10px"; pop.style.right="10px"; pop.style.width="auto";
-      pop.style.top=Math.max(8, Math.min(vh-180, Math.round(r.bottom+8)))+"px";
-      pop.style.maxHeight=Math.max(180, vh-Math.round(r.bottom+20))+"px";
-    }else{
-      const w=Math.min(360, vw-24);
-      const left=Math.max(12, Math.min(Math.round(r.left), vw-w-12));
-      pop.style.width=w+"px"; pop.style.left=left+"px"; pop.style.right="auto";
-      pop.style.top=Math.max(8, Math.round(r.bottom+8))+"px";
-      pop.style.maxHeight=Math.max(220, vh-Math.round(r.bottom+24))+"px";
-    }
-  }
-  function closeBellPop(){const pop=$("bellPop"); if(pop)pop.classList.remove("open")}
-  function openBellPop(forceOpen){
-    const pop=$("bellPop"); if(!pop)return;
-    const open=forceOpen===true?true:forceOpen===false?false:!pop.classList.contains("open");
-    pop.classList.toggle("open", open);
-    if(open){positionBellPop(); requestAnimationFrame(positionBellPop)}
-  }
-  function bindUI(){
-    const btn=$("bellBtn"), pop=$("bellPop");
-    if(btn&&pop){
-      btn.onclick=e=>{e.stopPropagation(); openBellPop()};
-      document.addEventListener("click",e=>{if(!pop.contains(e.target)&&!btn.contains(e.target))closeBellPop()});
-      window.addEventListener("resize",()=>{if(pop.classList.contains("open"))positionBellPop()});
-      window.addEventListener("scroll",()=>{if(pop.classList.contains("open"))positionBellPop()},{passive:true,capture:true});
-    }
-    if($("bellClose"))$("bellClose").onclick=e=>{e.stopPropagation(); closeBellPop()};
-    if($("bellList"))$("bellList").onclick=e=>{const bi=e.target.closest(".bi");if(bi){reopen(+bi.dataset.i); closeBellPop()}};
-    if($("bellTest"))$("bellTest").onclick=()=>{testBanner(); closeBellPop()};
-    if($("bellClear"))$("bellClear").onclick=()=>{history=[];saveHist()};
-    if($("lastUpPill"))$("lastUpPill").onclick=()=>reopen(0);
-  }
-
-  function start(){
-    loadPrefs(); bindUI();
-    const F=window.SPYGammaFeed;
-    if(F&&F.onPoll)F.onPoll((info)=>{refreshChannels(info&&info.reason||"poll")});
-    // Safety net: if autoRefresh off, still catch wake via feed-adapter pollNow; also light local timer for channels when auto on
-    // Baseline after initial page data settles
-    setTimeout(()=>{baseline()}, 800);
-  }
-
-  return {start, loadPrefs, testBanner, onNewSnapshot, showBanner, refreshChannels, baseline, positionBellPop, openBellPop, closeBellPop, get fp(){return fp}, get booted(){return booted}};
+// Auto-unlock from remembered device key
+tryAutoUnlock().then((ok) => { if (!ok) $("vaultPass").focus(); });
 })();
-window.LiveHub=LiveHub;
-LiveHub.start();
-</script></body></html>
+</script>
+</body></html>

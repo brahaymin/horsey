@@ -487,8 +487,24 @@ def main():
                 subprocess.run([sys.executable, pod_engine, sub], cwd=REPO_DIR, check=False, timeout=60)
             except Exception as e:
                 print("pod_engine", sub, "failed:", e)
-    # Respect .gitignore (pod/ is private). Never `git add -f pod`.
+    # Vault mode: rebuild encrypted state when password/meta present (plaintext stays local)
+    vault_py = os.path.join(REPO_DIR, "scripts", "vault_crypto.py")
+    vault_meta = os.path.join(REPO_DIR, "vault", "vault_meta.json")
+    env_vault = os.path.join(REPO_DIR, ".env.vault")
+    vault_active = os.path.exists(vault_py) and (
+        os.environ.get("HORSEY_VAULT_PASSWORD") or os.path.exists(env_vault) or os.path.exists(vault_meta)
+    )
+    if vault_active:
+        try:
+            subprocess.run([sys.executable, vault_py, "build-state"], cwd=REPO_DIR, check=False, timeout=180)
+            print("vault state rebuilt")
+        except Exception as e:
+            print("vault build-state failed:", e)
+    # Respect .gitignore (pod/ is private; vault plaintext ignored when active). Never `git add -f pod`.
     subprocess.run(["git", "add", "-A"], cwd=REPO_DIR, check=True)
+    if vault_active:
+        # Ensure encrypted artifacts are staged even if ignore rules drift
+        subprocess.run(["git", "add", "-f", "--", "vault/state.enc.json", "vault/app.enc.json", "vault/vault_meta.json", "index.html"], cwd=REPO_DIR, check=False)
     # Safety: ensure nothing under pod/ was staged
     staged = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=REPO_DIR, capture_output=True, text=True, check=False)
     bad = [ln for ln in (staged.stdout or "").splitlines() if ln.startswith("pod/") or ln == "pod"]

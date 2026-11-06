@@ -932,6 +932,25 @@ def alpaca_stage_ticket(ticket_id, dry_run=True, submit_paper=False, expiration=
 
 
 
+
+def maybe_rebuild_vault_state():
+    """If CEO vault is active, refresh vault/state.enc.json (never fatal)."""
+    try:
+        import subprocess
+        vault_py = P("scripts", "vault_crypto.py")
+        env_vault = P(".env.vault")
+        meta = P("vault", "vault_meta.json")
+        if not os.path.exists(vault_py):
+            return
+        if not (os.environ.get("HORSEY_VAULT_PASSWORD") or os.path.exists(env_vault) or os.path.exists(meta)):
+            return
+        # Only rebuild if password actually resolvable (vault_crypto skips cleanly otherwise)
+        subprocess.run([sys.executable, vault_py, "build-state"], cwd=ROOT, check=False, timeout=120,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        print(f"vault build-state skipped: {e}", file=sys.stderr)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
@@ -979,10 +998,13 @@ def main(argv=None):
     if a.cmd == "build-memos-index":
         idx = build_memos_index()
         print(f"memos_index.json: {idx['count']} memo(s) — " + ", ".join(f"{r['role']}={r['count']}" for r in idx["roles"]))
+        maybe_rebuild_vault_state()
     elif a.cmd == "post-questions":
         q = post_questions(a.file); print(f"posted {len(q['questions'])} question(s) as {q['prompt_set_id']}")
+        maybe_rebuild_vault_state()
     elif a.cmd == "bridge-ledger":
         print(f"bridged {bridge_specialist_ledger()} specialist entr(ies)")
+        maybe_rebuild_vault_state()
     elif a.cmd == "status":
         print(status())
     elif a.cmd == "size-ticket":
@@ -997,7 +1019,7 @@ def main(argv=None):
             print(json.dumps(tk, indent=2))
         return 0 if tk["verdict"] == "APPROVED_FOR_STAGING" else 2
     elif a.cmd == "log-signal":
-        print(json.dumps(log_signal(a), indent=2))
+        print(json.dumps(log_signal(a), indent=2)); maybe_rebuild_vault_state()
     elif a.cmd == "grade":
         done, sc = grade(parse_ts(a.now) if a.now else None)
         print(f"Graded {len(done)} signal(s). Active regime: {sc.get('active_regime_tags')}")
@@ -1005,6 +1027,7 @@ def main(argv=None):
             print(f" • {d['signal_id']} {d.get('agent_name')}: {d['grade_status']} R={d.get('realized_r')} brier={d.get('brier_error')}")
         print(json.dumps({k: {x: v.get(x) for x in ('graded_count', 'win_rate', 'avg_realized_r', 'brier_score', 'current_effective_weight')}
                           for k, v in sc.get("agents", {}).items()}, indent=2))
+        maybe_rebuild_vault_state()
     elif a.cmd in ("alpaca-status", "alpaca-sync"):
         offline = bool(getattr(a, "offline", False))
         st = alpaca_status(offline=offline)
@@ -1022,7 +1045,7 @@ def main(argv=None):
             a.ticket_id, dry_run=dry, submit_paper=a.submit_paper,
             expiration=a.expiration, strike=a.strike, occ_symbol=a.occ_symbol,
         )
-        print(json.dumps(result, indent=2))
+        print(json.dumps(result, indent=2)); maybe_rebuild_vault_state()
         return 0
     return 0
     return 0

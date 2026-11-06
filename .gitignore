@@ -12,3 +12,14 @@ pod/
 
 __pycache__/
 *.py[cod]
+# Vault plaintext sources (public archive serves encrypted vault/ + gate only)
+app_unlocked.html
+vault_gate.html
+.env.vault
+js/
+latest.json
+latest.md
+history/
+snapshots/
+docs/
+README.md
