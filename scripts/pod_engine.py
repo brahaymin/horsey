@@ -361,6 +361,113 @@ def status():
     return "\n".join(L)
 
 
+
+# ---------------------------------------------------------------- memos index + specialist bridge
+MEMO_SOURCES = [
+    ("pod/cio_briefings", "_cio_briefing.md", "cio", "CIO Executive Briefing", "CIO & Risk Gatekeeper"),
+    ("pod/ptj_macro", "_thesis.md", "ptj", "PTJ Macro & Regime", "PTJ Macro & Regime Strategist"),
+    ("pod/intraday_tape_gamma", "_thesis.md", "intraday", "Intraday Tape & Gamma", "Intraday Tape & Gamma Tactician"),
+    ("pod/buffett_value", "_thesis.md", "buffett", "Buffett Value Compounder", "Buffett Value Compounder"),
+]
+ROLE_ORDER = ["cio", "ptj", "intraday", "buffett", "gamma_data"]
+
+
+def _memo_meta(rel, role, label, agent):
+    import re
+    full = P(rel)
+    base = os.path.basename(rel)
+    m = re.match(r"(\d{4}-\d{2}-\d{2})[_-](\d{2})(\d{2})-ct-?([a-z0-9-]*?)(?:_thesis|_cio_briefing)?\.md$", base)
+    if role == "gamma_data":
+        parts = rel.split("/")  # snapshots/YYYY/MM/DD/HHMM-ct-tag.md
+        m2 = re.match(r"(\d{2})(\d{2})-ct-?(.*)\.md$", parts[-1])
+        date = parts[3] if re.match(r"\d{4}-\d{2}-\d{2}$", parts[3]) else f"{parts[1]}-{parts[2]}-{parts[3]}"
+        hh, mm, tag = (m2.group(1), m2.group(2), m2.group(3)) if m2 else ("00", "00", "")
+    elif m:
+        date, hh, mm, tag = m.group(1), m.group(2), m.group(3), m.group(4)
+    else:
+        dt = datetime.fromtimestamp(os.path.getmtime(full), CT)
+        date, hh, mm, tag = dt.strftime("%Y-%m-%d"), dt.strftime("%H"), dt.strftime("%M"), ""
+    title, summary = base, ""
+    with open(full, encoding="utf-8", errors="replace") as f:
+        lines = [l.rstrip("\n") for l in f]
+    for l in lines:
+        if l.startswith("# "):
+            title = l[2:].strip(); break
+    for l in lines:
+        t = l.strip()
+        if t and not t.startswith(("#", "|", "---", "**From", "**Agent", "**To", "**Source", "**Written", "Date:", "```", ">")):
+            summary = re.sub(r"[*`>_]", "", t).strip()[:220]; break
+    h12 = int(hh) % 12 or 12
+    disp = f"{datetime.strptime(date, '%Y-%m-%d').strftime('%a %b %d, %Y')} · {h12}:{mm} {'AM' if int(hh) < 12 else 'PM'} CT" + (f" · {tag}" if tag else "")
+    run = f"{date}_{hh}{mm}" + (f"-{tag}" if tag else "")
+    return {"id": f"{role}:{run}", "role": role, "label": label, "agent_name": agent, "title": title, "display_ct": disp,
+            "session_date": date, "run_id": run, "sort_key": f"{date}T{hh}{mm}", "path": rel, "bytes": os.path.getsize(full), "summary_line": summary}
+
+
+def build_memos_index():
+    import glob
+    items = []
+    for d, suf, role, label, agent in MEMO_SOURCES:
+        for f in glob.glob(P(d, "*" + suf)):
+            items.append(_memo_meta(os.path.relpath(f, ROOT).replace(os.sep, "/"), role, label, agent))
+    for f in glob.glob(P("snapshots", "*", "*", "*", "*.md")):
+        items.append(_memo_meta(os.path.relpath(f, ROOT).replace(os.sep, "/"), "gamma_data", "SPY Gamma Raw Data Report", "SPY Gamma Structure Monitor"))
+    items.sort(key=lambda x: (x["sort_key"], -ROLE_ORDER.index(x["role"])), reverse=True)
+    by_role = {r: [i["id"] for i in items if i["role"] == r] for r in ROLE_ORDER}
+    runs = {}
+    for i in items:
+        runs.setdefault(i["run_id"], {"run_id": i["run_id"], "display_ct": i["display_ct"], "session_date": i["session_date"], "memos": {}})
+        runs[i["run_id"]]["memos"].setdefault(i["role"], i["id"])
+    idx = {"schema_version": 1, "generated_ct": iso_ct(), "count": len(items),
+           "roles": [{"role": r, "label": next((s[3] for s in MEMO_SOURCES if s[2] == r), "SPY Gamma Raw Data Report"), "count": len(by_role[r])} for r in ROLE_ORDER],
+           "latest_cio_briefing": "pod/cio_briefings/latest.md" if os.path.exists(P("pod", "cio_briefings", "latest.md")) else None,
+           "by_role": by_role, "by_run": sorted(runs.values(), key=lambda r: r["run_id"], reverse=True), "memos": items}
+    wj(P("pod", "memos_index.json"), idx)
+    return idx
+
+
+def bridge_specialist_ledger():
+    """Sync entries specialists appended to pod/ledger/signals.jsonl into signals_log.jsonl (non-directional, deduped)."""
+    src = rjl(P("pod", "ledger", "signals.jsonl"))
+    if not src:
+        return 0
+    have = {s.get("bridge_key") for s in rjl(SIGLOG)}
+    st = rj(STATE, {}) or {}
+    added = 0
+    for e in src:
+        try:
+            key = f"{e.get('agent_id')}|{e.get('ts_ct')}"
+            if not e.get("agent_id") or key in have:
+                continue
+            mm = e.get("memo_md") or ""
+            rel = os.path.relpath(mm, ROOT) if mm.startswith("/") else mm
+            sig = {"signal_id": "SIG-BR-" + uuid.uuid5(uuid.NAMESPACE_URL, key).hex[:8].upper(), "logged_ct": e.get("ts_ct") or iso_ct(),
+                   "agent_id": e["agent_id"], "agent_name": e.get("agent"), "symbol": "SPY", "direction": "neutral",
+                   "entry": None, "stop": None, "target": None, "probability": 0.5, "horizon_hours": 24,
+                   "regime_tags": [t for t in (e.get("regime_tags") or []) if t in REGIMES] or classify_regime(market()),
+                   "stance": e.get("primary_bias"), "note": f"bridged from pod/ledger/signals.jsonl; setups {e.get('setup_ids')}",
+                   "memo_md": rel, "tag": "BRIDGED_SPECIALIST", "bridge_key": key, "graded": False}
+            ajl(SIGLOG, sig); have.add(key); added += 1
+            a = st.setdefault("agents", {}).setdefault(e["agent_id"], {})
+            a.update({"primary_bias": e.get("primary_bias"), "memo_md": rel, "last_signal_ct": sig["logged_ct"]})
+        except Exception as ex:  # never crash on a malformed specialist line
+            print(f"bridge: skipped entry ({ex})", file=sys.stderr)
+    if added:
+        st["updated_ct"] = iso_ct(); wj(STATE, st)
+    return added
+
+
+def _housekeeping():
+    try:
+        bridge_specialist_ledger()
+    except Exception as ex:
+        print(f"bridge error: {ex}", file=sys.stderr)
+    try:
+        build_memos_index()
+    except Exception as ex:
+        print(f"memos index error: {ex}", file=sys.stderr)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
@@ -382,8 +489,17 @@ def main(argv=None):
     s.add_argument("--probability", type=float, default=0.5); s.add_argument("--horizon-hours", type=float, default=24)
     s.add_argument("--stance"); s.add_argument("--note"); s.add_argument("--tag", default="PAPER"); s.add_argument("--as-of")
     g = sp.add_parser("grade"); g.add_argument("--now")
+    sp.add_parser("build-memos-index")
+    sp.add_parser("bridge-ledger")
     a = ap.parse_args(argv)
-    if a.cmd == "status":
+    if a.cmd in ("status", "log-signal", "grade"):
+        _housekeeping()
+    if a.cmd == "build-memos-index":
+        idx = build_memos_index()
+        print(f"memos_index.json: {idx['count']} memo(s) — " + ", ".join(f"{r['role']}={r['count']}" for r in idx["roles"]))
+    elif a.cmd == "bridge-ledger":
+        print(f"bridged {bridge_specialist_ledger()} specialist entr(ies)")
+    elif a.cmd == "status":
         print(status())
     elif a.cmd == "size-ticket":
         tk = size_ticket(a)

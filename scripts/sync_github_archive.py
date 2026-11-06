@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -76,6 +77,8 @@ Strictly verified public market data, levels, and regime description — zero tr
 Free, zero-login interactive dashboard (GitHub Pages) with a historical snapshot selector. Quick links: [`latest.md`](latest.md) · [`latest.json`](latest.json) · [`history/timeseries.csv`](history/timeseries.csv) · [`snapshots/`](snapshots/) ([index](snapshots/index.json)). All times Central Time (CT).
 
 **Docs:** [Day-trading methodologies & 50 mistakes](docs/day_trading_methodologies_and_50_mistakes.md) · [Live feed spec (`SPYGammaFeed`)](docs/live_feed_spec.md)
+
+**CEO Briefings:** [Latest CIO briefing](pod/cio_briefings/latest.md) · read every team memo in-app at [Tab 1 — Briefings & Team Memos](https://brahaymin.github.io/horsey/#briefings)
 
 **Agent Pod:** [CEO Architecture Manual](docs/agent_pod_architecture.md) · [Dashboard Tab 6 — Agent Pod & Blotter](https://brahaymin.github.io/horsey/#pod) · [`pod/roster.json`](pod/roster.json) · [`pod/scorecard.json`](pod/scorecard.json) · engine: `python3 scripts/pod_engine.py status|size-ticket|log-signal|grade` (paper / architecture demo — not financial advice)
 
@@ -471,6 +474,14 @@ def main():
 
     write_index(ts_ct)
 
+    # Refresh CEO Briefings/memos index + bridge specialist ledger (never fatal)
+    pod_engine = os.path.join(REPO_DIR, "scripts", "pod_engine.py")
+    if os.path.exists(pod_engine):
+        for sub in ("bridge-ledger", "build-memos-index"):
+            try:
+                subprocess.run([sys.executable, pod_engine, sub], cwd=REPO_DIR, check=False, timeout=60)
+            except Exception as e:
+                print("pod_engine", sub, "failed:", e)
     subprocess.run(["git", "add", "-A"], cwd=REPO_DIR, check=True)
     status = subprocess.run(["git", "status", "--porcelain"], cwd=REPO_DIR, capture_output=True, text=True, check=True)
     if status.stdout.strip():

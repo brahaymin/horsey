@@ -1,7 +1,7 @@
 {
   "disclaimer": "Regime Stance & Conditional Structural Triggers (Paper / Architecture Demo \u2014 Not Live Financial Advice)",
   "as_of_ct": "2026-11-05T17:12:12-0600",
-  "updated_ct": "2026-11-05T18:45:13-0600",
+  "updated_ct": "2026-11-05T19:00:37-0600",
   "market": {
     "spy_close": 733.0,
     "sma200": 730.15,
@@ -35,8 +35,10 @@
         "IF reclaim/hold 735 with RVOL cooling and VIX9D-VIX narrowing \u2192 only then consider PTJ-2026-11-06-B long with hard invalidation back through 730.151."
       ],
       "last_signal_id": "SIG-13A01000",
-      "last_signal_ct": "2026-11-05T18:45:13-0600",
-      "last_note": "STAND-DOWN primary. Memos: pod/ptj_macro/2026-11-05_1712-ct-post-close_thesis.json|.md. Ledger appended. No pod_engine size-ticket until trigger prints."
+      "last_signal_ct": "2026-11-05T18:44:37-0600",
+      "last_note": "STAND-DOWN primary. Memos: pod/ptj_macro/2026-11-05_1712-ct-post-close_thesis.json|.md. Ledger appended. No pod_engine size-ticket until trigger prints.",
+      "primary_bias": "flat_defense_stand_down",
+      "memo_md": "pod/ptj_macro/2026-11-05_1712-ct-post-close_thesis.md"
     },
     "ee33b632-6c42-4d43-bf17-665bc939db17": {
       "name": "Intraday Tape & Gamma Tactician",
@@ -52,8 +54,10 @@
         "IF SPY reclaims and holds $735 for 30m \u2192 short-covering toward $740 possible; size at throttled 0.25%."
       ],
       "last_signal_id": "SIG-CFD2DF60",
-      "last_signal_ct": "2026-11-05T18:42:50-0600",
-      "last_note": "Setup ITT-2026-11-06-A PRIMARY: Fri RTH short after 30m OR \u2014 break/hold below OR_low AND 732.71, OR reject 735-740. Hard invalidation OR_high or 740. Time stop 45-60m / flat 0DTE by 14:45 CT. Size 0.25% (VIX throttle). Source latest.json 2026-11-05T17:12:12-0600. Market CLOSED \u2014 watch only until Fri open. Memo: pod/intraday_tape_gamma/latest.json"
+      "last_signal_ct": "2026-11-05T18:40:16-0600",
+      "last_note": "Setup ITT-2026-11-06-A PRIMARY: Fri RTH short after 30m OR \u2014 break/hold below OR_low AND 732.71, OR reject 735-740. Hard invalidation OR_high or 740. Time stop 45-60m / flat 0DTE by 14:45 CT. Size 0.25% (VIX throttle). Source latest.json 2026-11-05T17:12:12-0600. Market CLOSED \u2014 watch only until Fri open. Memo: pod/intraday_tape_gamma/latest.json",
+      "primary_bias": "short_trend_continuation_watch_friday_rth",
+      "memo_md": "pod/intraday_tape_gamma/2026-11-05_1712-ct-post-close_thesis.md"
     },
     "e44fa805-3796-4f84-8366-30901208f4ab": {
       "name": "Buffett Value Compounder",
@@ -69,8 +73,10 @@
         "IF credit stress spreads (^BKX joins semis) \u2192 raise required margin of safety to 35%."
       ],
       "last_signal_id": "SIG-E009AAED",
-      "last_signal_ct": "2026-11-05T18:42:52-0600",
-      "last_note": "Memo at pod/buffett_value/2026-11-05_1712-ct-post-close_thesis.md. Most quality compounders still above 25%-35% MoS zones (MSFT 377/327, NVDA 98/85, AVGO 148/128, TSM 172/149, V 209/181, AAPL 127/110, JPM 219/190, BRK-B 392/339). GOOGL ($282.57) and META ($605.08) clear 25% MoS only on maintenance-capex owner earnings, not full FCF. Wash-sale check awaits data/robinhood_options.csv."
+      "last_signal_ct": "2026-11-05T18:45:00-0600",
+      "last_note": "Memo at pod/buffett_value/2026-11-05_1712-ct-post-close_thesis.md. Most quality compounders still above 25%-35% MoS zones (MSFT 377/327, NVDA 98/85, AVGO 148/128, TSM 172/149, V 209/181, AAPL 127/110, JPM 219/190, BRK-B 392/339). GOOGL ($282.57) and META ($605.08) clear 25% MoS only on maintenance-capex owner earnings, not full FCF. Wash-sale check awaits data/robinhood_options.csv.",
+      "primary_bias": "conditional_accumulate_GOOGL_META_else_wait",
+      "memo_md": "pod/buffett_value/2026-11-05_1712-ct-post-close_thesis.md"
     },
     "6b3e6d50-8be6-43f5-afa8-24338fa062f5": {
       "name": "SPY Gamma Structure Monitor",

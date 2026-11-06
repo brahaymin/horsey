@@ -4,12 +4,12 @@
   "active_regime_tags": [
     "short_gamma_backwardation"
   ],
-  "updated_ct": "2026-11-05T18:40:00-0600",
+  "updated_ct": "2026-11-05T19:00:37-0600",
   "agents": {
     "05895e3e-1c82-4cec-9ff3-07aa73b5c0db": {
       "name": "PTJ Macro & Regime Strategist",
       "role": "specialist",
-      "signals_logged": 0,
+      "signals_logged": 2,
       "graded_count": 0,
       "win_rate": null,
       "avg_realized_r": null,
@@ -24,7 +24,7 @@
     "ee33b632-6c42-4d43-bf17-665bc939db17": {
       "name": "Intraday Tape & Gamma Tactician",
       "role": "specialist",
-      "signals_logged": 0,
+      "signals_logged": 2,
       "graded_count": 0,
       "win_rate": null,
       "avg_realized_r": null,
@@ -39,7 +39,7 @@
     "e44fa805-3796-4f84-8366-30901208f4ab": {
       "name": "Buffett Value Compounder",
       "role": "specialist",
-      "signals_logged": 0,
+      "signals_logged": 2,
       "graded_count": 0,
       "win_rate": null,
       "avg_realized_r": null,

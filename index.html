@@ -75,10 +75,27 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
 .calc{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}.calc label{font-size:11px;color:var(--mut);text-transform:uppercase;display:block}.calc input,.calc select{width:100%;box-sizing:border-box}
 .fw li{list-style:none;margin:3px 0}.fw{padding:0;margin:6px 0}.verdict{font-weight:800;font-size:15px}
 </style>
+<style>
+.ceob{background:linear-gradient(135deg,#f59e0b,#10b981);color:#06110c;font-weight:800;border:0;border-radius:999px;padding:6px 12px;white-space:nowrap}
+.brw{display:grid;grid-template-columns:300px minmax(0,1fr);gap:12px;align-items:start}
+@media(max-width:900px){.brw{grid-template-columns:1fr}}
+.brside{position:sticky;top:64px}@media(max-width:900px){.brside{position:static}}
+.pills{display:flex;flex-direction:column;gap:6px}@media(max-width:900px){.pills{flex-direction:row;flex-wrap:wrap}}
+.pills button{display:flex;justify-content:space-between;align-items:center;gap:8px;text-align:left;border-radius:10px;font-weight:600}
+.pills button.on{border-color:#10b981;background:#0b2a22}.pills .ct{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:0 7px;font-size:11px}
+.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));gap:10px;margin-bottom:12px}
+.strip .card{padding:10px 12px}.strip .lab{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}.strip .sv{font-weight:800;margin:4px 0 6px;font-size:13.5px}
+.strip .cio{border-top:3px solid #f59e0b}.strip .ptj{border-top:3px solid var(--acc)}.strip .intraday{border-top:3px solid var(--neg)}.strip .buffett{border-top:3px solid #10b981}
+.reader .md{font-size:14.5px;line-height:1.6}.reader .md h1{font-size:23px;margin:4px 0 10px;line-height:1.25}.reader .md table{display:block;overflow-x:auto;max-width:100%}
+.reader .md th{background:var(--panel2)}.reader .md td,.reader .md th{border:1px solid var(--line);padding:6px 8px}.reader .md code{background:#0b1220;padding:1px 5px;border-radius:4px;font-size:.92em}
+.reader .md hr{border:0;border-top:1px solid var(--line);margin:16px 0}.reader .md blockquote{background:var(--panel2);margin:8px 0;padding:6px 12px;border-left:3px solid #f59e0b}
+.rdhead{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:8px;border-bottom:1px solid var(--line);padding-bottom:8px}
+</style>
 </head><body>
 <div class="topbar"><div class="wrap">
  <div class="brand">SPY Gamma Structure &amp; Regime Monitor<small id="asof">Loading…</small></div>
  <select id="snapSel" aria-label="Historical snapshot"></select>
+ <button id="qbBrief" class="ceob">📋 CEO Briefing</button>
  <button class="src" id="srcBtn" title="Data source / live feed settings"><span class="dot" id="srcDot"></span><span id="srcLbl">Source: GitHub Archive</span> ⚙</button>
  <span id="liveBadge" class="pill" style="display:none"></span>
  <span class="grow"></span>
@@ -104,17 +121,34 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
 
 <!-- TIER 2: workspace tabs -->
 <nav class="tabs" id="tabs" role="tablist">
- <button data-tab="gamma" class="on">1. Gamma &amp; Walls</button>
- <button data-tab="px">2. Price, Volume &amp; VIX</button>
- <button data-tab="rs">3. AI vs. Banks &amp; Futures</button>
- <button data-tab="news">4. Headlines &amp; Raw .md</button>
- <button data-tab="play">5. Trader Playbook (5 Legends + 50 Mistakes)</button>
- <button data-tab="pod">6. Agent Pod &amp; Blotter</button>
+ <button data-tab="briefings" class="on">1. Briefings &amp; Team Memos</button>
+ <button data-tab="gamma">2. Gamma &amp; Walls</button>
+ <button data-tab="px">3. Price, Volume &amp; VIX</button>
+ <button data-tab="rs">4. AI vs. Banks, Futures &amp; News</button>
+ <button data-tab="pod">5. Pod Desk &amp; Risk Sizer</button>
+ <button data-tab="play">6. Trader Playbook (5 Legends + 50 Mistakes)</button>
  <span class="sp"></span>
  <button data-tab="all">▦ All Panels</button>
 </nav>
 
-<section class="panel show" id="p-gamma"><div class="phead">1 · Gamma &amp; Walls</div>
+<section class="panel show" id="p-briefings"><div class="phead">1 · Briefings &amp; Team Memos</div>
+ <div class="strip" id="brStrip"></div>
+ <div class="brw">
+  <div class="card brside">
+   <div class="note" style="margin:0 0 6px;text-transform:uppercase">Author / Desk</div>
+   <div class="pills" id="brPills"></div>
+   <div class="note" style="margin:12px 0 4px;text-transform:uppercase">Run / Date history</div>
+   <select id="brRun" style="width:100%"></select>
+   <div class="note" id="brIdxNote" style="margin-top:8px"></div>
+  </div>
+  <div class="card reader">
+   <div class="rdhead"><div><div style="font-weight:800" id="brTitle">Loading…</div><div class="note" style="margin:2px 0 0" id="brMeta"></div></div>
+    <div class="row"><button id="brFmt" class="on">Formatted View</button><button id="brRaw">Raw .md</button><button id="brCopy">📋 Copy</button></div></div>
+   <div class="md" id="brBody">Loading briefing…</div>
+  </div>
+ </div>
+</section>
+<section class="panel" id="p-gamma"><div class="phead">2 · Gamma &amp; Walls</div>
  <div class="card"><h2>Strike-by-Strike GEX Profile ($700–$810)</h2>
   <div class="row" id="scopeBtns"></div><div class="row" style="margin-top:6px" id="modeBtns"></div>
   <div class="chartbox" style="margin-top:10px"><canvas id="gexChart"></canvas></div><div class="note" id="gexNote"></div></div>
@@ -124,7 +158,7 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
  </div>
 </section>
 
-<section class="panel" id="p-px"><div class="phead">2 · Price, Volume &amp; VIX</div>
+<section class="panel" id="p-px"><div class="phead">3 · Price, Volume &amp; VIX</div>
  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,520px),1fr))">
   <div class="card"><h2>SPY Price, 200 SMA, $735 Node &amp; Volume</h2><div class="row" id="pxBtns"></div>
    <div class="chartbox" style="margin-top:10px"><canvas id="pxChart"></canvas></div><div class="note" id="pxNote"></div>
@@ -133,7 +167,7 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
  </div>
 </section>
 
-<section class="panel" id="p-rs"><div class="phead">3 · AI vs. Banks &amp; Futures</div>
+<section class="panel" id="p-rs"><div class="phead">4 · AI vs. Banks &amp; Futures</div>
  <div class="card"><h2>AI Complex, Data-Center &amp; KBW Bank Relative Strength</h2><div class="row" id="rsBtns"></div>
   <div class="grid two" style="margin-top:10px;align-items:start">
    <div class="chartbox" style="height:clamp(380px,52vh,540px)"><canvas id="rsChart"></canvas></div>
@@ -142,7 +176,7 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
  <div class="card" style="margin-top:12px"><h2>Globex Futures (/ES, /NQ, /RTY)</h2><div class="tbl"><table id="futTbl"></table></div><div class="note">Yahoo Finance delayed quotes; displayed change/reference is not certified exchange settlement.</div></div>
 </section>
 
-<section class="panel" id="p-news"><div class="phead">4 · Headlines &amp; Raw .md</div>
+<section class="panel" id="p-news"><div class="phead">4b · Verified Headlines &amp; Raw Snapshot .md</div>
  <div class="card"><h2>Verified Data-Center / AI Policy Headlines</h2><ul class="hd" id="news"></ul></div>
  <div class="card" style="margin-top:12px"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Snapshot Markdown Report</h2>
   <div class="row"><button id="mdView">Formatted</button><button id="mdRaw">Raw</button><button id="mdCopy">📋 Copy .md</button><a id="lnkMd2" target="_blank" rel="noopener">Open .md ↗</a></div></div>
@@ -161,7 +195,7 @@ footer{color:var(--mut);font-size:12px;text-align:center;padding:24px 0 40px}
  </div><div class="note" id="pbcount" style="margin:4px 0 0"></div></div>
  <div id="pb" class="md">Loading playbook…</div></div>
 </section>
-<section class="panel" id="p-pod"><div class="phead">6 · Agent Pod &amp; Blotter <span class="note">(Paper / Architecture Demo — Not Live Financial Advice)</span></div>
+<section class="panel" id="p-pod"><div class="phead">5 · Pod Desk &amp; Risk Sizer <span class="note">(Paper / Architecture Demo — Not Live Financial Advice)</span></div>
  <div class="card"><div class="podban" id="podBanner"></div>
   <div class="note" style="text-align:center;margin-top:6px"><a href="https://github.com/brahaymin/horsey/blob/main/docs/agent_pod_architecture.md" target="_blank" rel="noopener">📘 CEO Architecture Manual (docs/agent_pod_architecture.md) ↗</a> · <span id="podAsOf"></span></div></div>
  <div class="card" id="podCio" style="margin-top:12px"></div>
@@ -228,7 +262,7 @@ if(HAS_CHART)Chart.register(vlines,hlines);
 
 
 async function getJSON(u){const r=await fetch(u,{cache:"no-cache"});if(!r.ok)throw new Error(u+" → HTTP "+r.status);return r.json()}
-let IDX=null,S=null,LOG=null,CUR=0,MDTXT="",charts={},st={scope:"next_session",mode:"net",px:"intraday",rs:"d1_pct",sortK:null,sortDir:-1,tab:"gamma",mdRaw:false};
+let IDX=null,S=null,LOG=null,CUR=0,MDTXT="",charts={},st={scope:"next_session",mode:"net",px:"intraday",rs:"d1_pct",sortK:null,sortDir:-1,tab:"briefings",mdRaw:false};
 const LIVE={};
 function btns(id,items,key,fn){const w=$(id);w.innerHTML="";items.forEach(([v,l])=>{const b=document.createElement("button");b.textContent=l;b.dataset.v=v;b.onclick=()=>{st[key]=v;[...w.children].forEach(x=>x.classList.toggle("on",x.dataset.v===v));fn()};if(st[key]===v)b.classList.add("on");w.appendChild(b)})}
 function buildButtons(){
@@ -369,8 +403,10 @@ function renderRuler(){const{sp,g45,g0}=heroData();const price=LIVE.spy_price??s
 function resizeCharts(){requestAnimationFrame(()=>Object.values(charts).forEach(ch=>{try{ch.resize();ch.update("none")}catch(e){}}))}
 function showTab(t){st.tab=t;document.body.classList.toggle("all",t==="all");
  [...$("tabs").querySelectorAll("button")].forEach(b=>b.classList.toggle("on",b.dataset.tab===t));
- ["gamma","px","rs","news","play","pod"].forEach(k=>$("p-"+k).classList.toggle("show",t==="all"?(k!=="play"):k===t));
- if(t==="play")loadPlaybook();if(t==="pod"||t==="all")loadPod();if(t==="news"||t==="all")loadMd();resizeCharts()}
+ if(t==="news")t="rs";if(t==="briefing")t="briefings";st.tab=t;[...$("tabs").querySelectorAll("button")].forEach(b=>b.classList.toggle("on",b.dataset.tab===t));
+ ["briefings","gamma","px","rs","news","play","pod"].forEach(k=>$("p-"+k).classList.toggle("show",t==="all"?(k!=="play"):(k===t||(k==="news"&&t==="rs"))));
+ if(t==="briefings"||t==="all")loadBriefings();
+ if(t==="play")loadPlaybook();if(t==="pod"||t==="all")loadPod();if(t==="rs"||t==="all")loadMd();resizeCharts()}
 $("tabs").onclick=e=>{const b=e.target.closest("button");if(b){showTab(b.dataset.tab);const y=$("tabs").getBoundingClientRect().top+scrollY-$("tabs").offsetTop+0;}};
 $("qbPlay").onclick=()=>{showTab("play");$("tabs").scrollIntoView({behavior:"smooth"})};
 function fixSticky(){$("tabs").style.top=document.querySelector(".topbar").offsetHeight+"px"}addEventListener("resize",()=>{fixSticky();if(S)renderRuler()});
@@ -404,7 +440,7 @@ function renderSnapshot(snap,meta){S=snap;meta=meta||{};
  $("lnkMd").href=$("lnkMd2").href=S.md_rel_path||meta.md_path||"latest.md";$("lnkJson").href=meta.json_path||"latest.json";
  $("asof").textContent=(meta.display_ct||S.timestamp_ct)+(S.gex_meta&&S.gex_meta.chain_timestamp?" · options chain "+utcToCT(S.gex_meta.chain_timestamp):"");
  renderHero();btns("scopeBtns",SCOPES.map(([k])=>[k,scopeLabel(k)]),"scope",drawGex);
- drawGex();drawScopeTbl();drawPx();drawNode();drawVix();drawRs();drawFut();drawNews();mdFor=null;if(st.tab==="news"||st.tab==="all")loadMd();resizeCharts()}
+ drawGex();drawScopeTbl();drawPx();drawNode();drawVix();drawRs();drawFut();drawNews();mdFor=null;if(st.tab==="rs"||st.tab==="all")loadMd();resizeCharts()}
 function applyLiveTick(t){Object.assign(LIVE,Object.fromEntries(Object.entries(t).filter(([k,v])=>v!=null)));if(!S)return;renderHero();
  const b=$("liveBadge");b.style.display="";b.className="pill pos";b.textContent="● LIVE "+new Date(t.ts||Date.now()).toLocaleTimeString("en-US",{timeZone:"America/Chicago",hour:"numeric",minute:"2-digit",second:"2-digit"})+" CT";
  ["h1v","h2v","h4v"].forEach(id=>{$(id).classList.remove("flash");void $(id).offsetWidth;$(id).classList.add("flash")})}
@@ -430,8 +466,8 @@ document.addEventListener("keydown",e=>{if(e.key==="Escape")$("feedModal").class
  const want=new URLSearchParams(location.search).get("snap");let start=0;if(want){const i=idx.snapshots.findIndex(s=>s.id===want);if(i>=0)start=i}
  $("snapSel").onchange=()=>load(+$("snapSel").value);
  await F.loadLog();await load(start);F.start();
- const tab=(location.hash||"").replace("#","");if(["gamma","px","rs","news","play","pod","all"].includes(tab))showTab(tab);fixSticky()})().catch(e=>err(e.message));
-addEventListener("hashchange",()=>{const t=location.hash.slice(1);if(["gamma","px","rs","news","play","pod","all"].includes(t))showTab(t)});
+ const tab=(location.hash||"").replace("#","");if(["briefings","briefing","gamma","px","rs","news","play","pod","all"].includes(tab))showTab(tab);fixSticky()})().catch(e=>err(e.message));
+addEventListener("hashchange",()=>{const t=location.hash.slice(1);if(["briefings","briefing","gamma","px","rs","news","play","pod","all"].includes(t))showTab(t)});
 
 
 // ---------- Tab 6: Agent Pod & Blotter (mirrors scripts/pod_engine.py) ----------
@@ -483,4 +519,38 @@ function calcTicket(){const v=id=>{const x=$(id).value;return x===""?null:+x};co
  <span class="pill pos">T1 ${t1!=null?n(t1):"—"}</span><span class="pill pos">T2 ${t2!=null?n(t2):"—"}</span><span class="pill">OCO: 50% @T1, trail to entry, 50% @T2</span></div>
  <ul class="fw">${chk.map((c,i)=>`<li>${c[0]?"✅":"❌"} ${i+1}. ${c[1]} <span class="mut">${esc(c[2])}</span></li>`).join("")}${r&&qty<1?'<li>⚠️ Rounds to 0 units at this budget.</li>':""}</ul>`}
 ["cEq","cRisk","cIns","cDir","cAg","cEn","cSt","cT1","cT2","cRef","cTs","cVix","cDd"].forEach(id=>{$(id).addEventListener("input",calcTicket);$(id).addEventListener("change",calcTicket)});
+
+// ---------- Tab 1: Briefings & Team Memos (reads pod/memos_index.json) ----------
+const BR={idx:null,role:"cio",run:null,raw:false,txt:"",cache:{}};
+const BR_ROLES=[["cio","CIO Executive Briefing","🛡️"],["ptj","PTJ Macro & Regime","🌐"],["intraday","Intraday Tape & Gamma","⚡"],["buffett","Buffett Value","🏛️"],["gamma_data","SPY Gamma Data (.md)","📡"]];
+async function loadBriefings(){if(BR.idx)return;BR.idx={memos:[]};
+ try{const r=await fetch("pod/memos_index.json",{cache:"no-cache"});if(r.ok)BR.idx=await r.json()}catch(e){}
+ try{const r=await fetch("pod/signals/latest_pod_state.json",{cache:"no-cache"});if(r.ok)BR.state=await r.json()}catch(e){}
+ const runs=BR.idx.by_run||[];BR.run=runs[0]?.run_id||null;
+ $("brRun").innerHTML=runs.map(r=>`<option value="${esc(r.run_id)}">${esc(r.display_ct)} (${Object.keys(r.memos).length} memos)</option>`).join("")||"<option>No memos yet</option>";
+ $("brIdxNote").textContent=BR.idx.generated_ct?`${BR.idx.count} memos indexed · updated ${BR.idx.generated_ct.replace("T"," ").slice(0,16)} CT`:"";
+ drawBrPills();drawBrStrip();openMemo("cio")}
+function brMemo(role,run){const ms=BR.idx.memos||[];return ms.find(m=>m.role===role&&m.run_id===(run??BR.run))||ms.find(m=>m.role===role)}
+function drawBrPills(){const c=r=>(BR.idx.memos||[]).filter(m=>m.role===r).length;
+ $("brPills").innerHTML=BR_ROLES.map(([r,l,i])=>`<button data-role="${r}" class="${r===BR.role?"on":""}"><span>${i} ${l}</span><span class="ct">${c(r)}</span></button>`).join("")}
+function drawBrStrip(){const S=BR.state||{},A=S.agents||{},cs=S.cio_synthesis||{};const ids={ptj:"05895e3e-1c82-4cec-9ff3-07aa73b5c0db",intraday:"ee33b632-6c42-4d43-bf17-665bc939db17",buffett:"e44fa805-3796-4f84-8366-30901208f4ab"};
+ const card=(r,lab,stance,txt)=>`<div class="card ${r}"><div class="lab">${lab}</div><div class="sv">${esc(stance||"—")}</div><div class="note" style="margin:0 0 8px">${esc((txt||"").slice(0,150))}${(txt||"").length>150?"…":""}</div><button data-read="${r}">Read memo →</button></div>`;
+ $("brStrip").innerHTML=card("cio","🛡️ CIO Throttle",`Risk ${(cs.risk_throttle_pct||[0.25,0.5]).join("%–")}% per idea`,cs.summary)+
+  ["ptj","intraday","buffett"].map(r=>{const a=A[ids[r]]||{};return card(r,BR_ROLES.find(x=>x[0]===r)[2]+" "+BR_ROLES.find(x=>x[0]===r)[1],a.stance||a.primary_bias,a.headline)}).join("")}
+async function openMemo(role){BR.role=role;drawBrPills();const m=brMemo(role);
+ if(!m){$("brTitle").textContent="No memo yet for this desk";$("brMeta").textContent="";$("brBody").innerHTML='<div class="note">Nothing filed for this run yet.</div>';return}
+ $("brTitle").textContent=m.title;$("brMeta").innerHTML=`${esc(m.agent_name)} · ${esc(m.display_ct)} · <a href="${esc(m.path)}" target="_blank" rel="noopener">${esc(m.path)}</a>`;
+ $("brBody").textContent="Loading…";
+ try{if(!BR.cache[m.path]){const r=await fetch(m.path,{cache:"no-cache"});if(!r.ok)throw new Error("HTTP "+r.status);BR.cache[m.path]=await r.text()}BR.txt=BR.cache[m.path];drawBrBody()}
+ catch(e){$("brBody").innerHTML=`<div class="note">Could not load ${esc(m.path)} (${esc(e.message)})</div>`}}
+function drawBrBody(){const b=$("brBody");if(BR.raw||typeof marked==="undefined")b.innerHTML="<pre>"+esc(BR.txt)+"</pre>";
+ else{b.innerHTML=marked.parse(BR.txt);b.querySelectorAll("a").forEach(a=>{a.target="_blank";a.rel="noopener"})}
+ $("brFmt").classList.toggle("on",!BR.raw);$("brRaw").classList.toggle("on",BR.raw)}
+$("brPills").onclick=e=>{const b=e.target.closest("button[data-role]");if(b)openMemo(b.dataset.role)};
+$("brStrip").onclick=e=>{const b=e.target.closest("button[data-read]");if(b){openMemo(b.dataset.read);$("brBody").scrollIntoView({behavior:"smooth",block:"nearest"})}};
+$("brRun").onchange=()=>{BR.run=$("brRun").value;openMemo(BR.role)};
+$("brFmt").onclick=()=>{BR.raw=false;drawBrBody()};$("brRaw").onclick=()=>{BR.raw=true;drawBrBody()};
+$("brCopy").onclick=async()=>{try{await navigator.clipboard.writeText(BR.txt);$("brCopy").textContent="✓ Copied"}catch(e){BR.raw=true;drawBrBody();$("brCopy").textContent="Select text"}setTimeout(()=>$("brCopy").textContent="📋 Copy",1500)};
+$("qbBrief").onclick=()=>{showTab("briefings");history.replaceState(null,"","#briefings");$("tabs").scrollIntoView({behavior:"smooth"})};
+loadBriefings();
 </script></body></html>

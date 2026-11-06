@@ -10,6 +10,8 @@ Free, zero-login interactive dashboard (GitHub Pages) with a historical snapshot
 
 **Docs:** [Day-trading methodologies & 50 mistakes](docs/day_trading_methodologies_and_50_mistakes.md) · [Live feed spec (`SPYGammaFeed`)](docs/live_feed_spec.md)
 
+**CEO Briefings:** [Latest CIO briefing](pod/cio_briefings/latest.md) · read every team memo in-app at [Tab 1 — Briefings & Team Memos](https://brahaymin.github.io/horsey/#briefings)
+
 **Agent Pod:** [CEO Architecture Manual](docs/agent_pod_architecture.md) · [Dashboard Tab 6 — Agent Pod & Blotter](https://brahaymin.github.io/horsey/#pod) · [`pod/roster.json`](pod/roster.json) · [`pod/scorecard.json`](pod/scorecard.json) · engine: `python3 scripts/pod_engine.py status|size-ticket|log-signal|grade` (paper / architecture demo — not financial advice)
 
 ## Repository Layout
