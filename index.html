@@ -5,8 +5,8 @@
 <meta name="robots" content="noindex,nofollow">
 <meta name="description" content="Private AES-256 vault login for the Horsey command desk.">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link rel="preload" as="script" href="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js">
-<link rel="preload" as="script" href="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js">
+<script defer src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <style>
 :root{--bg:#070a10;--card:#0f1520;--line:#243049;--txt:#e8edf7;--mut:#8b97b0;--acc:#38bdf8;--neg:#f43f5e;--pos:#22c55e;--warn:#f59e0b}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--txt);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif}
@@ -220,13 +220,60 @@ function patchHtml(html){
   else html += boot;
   return html;
 }
+function loadExternalScript(src, globalCheck, timeoutMs){
+  if (globalCheck && window[globalCheck]) return Promise.resolve();
+  return new Promise((resolve) => {
+    const existing = Array.from(document.scripts).find(el => el.src === src);
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    const timer = setTimeout(finish, timeoutMs || 3500);
+    if (existing) {
+      if (globalCheck && window[globalCheck]) { clearTimeout(timer); return finish(); }
+      existing.addEventListener("load", () => { clearTimeout(timer); finish(); }, { once: true });
+      existing.addEventListener("error", () => { clearTimeout(timer); finish(); }, { once: true });
+      return;
+    }
+    const sc = document.createElement("script");
+    sc.src = src;
+    sc.async = false;
+    sc.onload = () => { clearTimeout(timer); finish(); };
+    sc.onerror = () => { clearTimeout(timer); finish(); };
+    document.head.appendChild(sc);
+  });
+}
 async function mountApp(appPayload){
   const html = patchHtml(appPayload.html || "");
   if (appPayload.files) Object.assign(VAULT_FILES, appPayload.files);
   installFetchWrapper();
-  document.open();
-  document.write(html);
-  document.close();
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+  if (parsed.title) document.title = parsed.title;
+  // Remove login-gate styles, inject unlocked dashboard styles & links
+  Array.from(document.head.querySelectorAll("style")).forEach(el => el.remove());
+  Array.from(parsed.head.querySelectorAll("style, link[rel=icon]")).forEach(el => {
+    document.head.appendChild(document.importNode(el, true));
+  });
+  document.body.className = parsed.body.className || "";
+  document.body.innerHTML = parsed.body.innerHTML;
+  // Run scripts in exact document order without document.write()
+  const allScripts = [
+    ...Array.from(parsed.head.querySelectorAll("script")),
+    ...Array.from(parsed.body.querySelectorAll("script"))
+  ];
+  // Remove inert script placeholders copied by innerHTML before executing live ones
+  Array.from(document.body.querySelectorAll("script")).forEach(el => el.remove());
+  for (const orig of allScripts) {
+    const src = orig.getAttribute("src");
+    if (src) {
+      const check = /chart(\.umd)?(\.min)?\.js/i.test(src) ? "Chart"
+                  : /marked(\.min)?\.js/i.test(src) ? "marked" : null;
+      await loadExternalScript(src, check, 3500);
+    } else if ((orig.textContent || "").trim()) {
+      const sc = document.createElement("script");
+      for (const attr of Array.from(orig.attributes)) sc.setAttribute(attr.name, attr.value);
+      sc.textContent = orig.textContent;
+      document.body.appendChild(sc);
+    }
+  }
 }
 async function unlockWithBundle(key, remember, metaSalt, metaIter){
   let bundle;
