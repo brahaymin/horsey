@@ -1,0 +1,19 @@
+{
+  "prompt_set_id": "CEO-Q-2026-11-05-POSTCLOSE",
+  "status": "submitted",
+  "submitted_ct": "2026-11-06T12:43:21-0600",
+  "saved_ct": "2026-11-06T12:43:21-0600",
+  "session_target": "2026-11-06",
+  "briefing_ref": "pod/cio_briefings/2026-11-05_1712-ct-post-close_cio_briefing.md",
+  "responses": {
+    "risk_budget": "0.25_shot_0.50_cap",
+    "approved_scenarios": [
+      "scenario_a"
+    ],
+    "buffett_bucket": "wait_deeper_mos"
+  },
+  "risk_pct": 0.25,
+  "ceo_note": "Let PTJ know my thoughts: I feel like the small run up today was just some short position profit taking given the volume and the gex regime this morning. What are their thoughts?",
+  "last_ceo_note": "Let PTJ know my thoughts: I feel like the small run up today was just some short position profit taking given the volume and the gex regime this morning. What are their thoughts?",
+  "source": "horsey web app"
+}
