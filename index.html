@@ -32,7 +32,7 @@ button.ghost{background:transparent}
 <div class="wrap" id="gateWrap">
  <form class="card" id="vaultForm" method="post" action="#" autocomplete="on">
   <div class="lockico" aria-hidden="true">🔒</div>
-  <div class="brand">Horsey Command Desk<small>AES-256 private vault · paper trading architecture</small></div>
+  <div class="brand">Horsey Command Desk<small>Private Executive Access</small></div>
   <!-- Username field so password managers save/autofill cleanly -->
   <label class="visually-hidden" for="vaultUser">Username</label>
   <input class="visually-hidden" type="text" id="vaultUser" name="username" value="horsey-ceo" autocomplete="username" tabindex="-1" aria-hidden="true">
@@ -46,7 +46,7 @@ button.ghost{background:transparent}
    <button type="submit" class="primary" id="unlockBtn">Unlock Command Desk</button>
   </div>
   <div class="err" id="vaultErr" role="alert"></div>
-  <p class="hint">Session unlocks in-browser with PBKDF2 + AES-256-GCM. Wrong password never reaches a server. Live market polls refresh the encrypted state file only.</p>
+  <p class="hint">Enter your password to unlock the command desk. Wrong passwords never leave this device.</p>
  </form>
 </div>
 <script>
