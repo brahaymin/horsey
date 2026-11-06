@@ -161,6 +161,16 @@ def collect_state_files() -> dict:
     # Market core
     add_json("latest.json", ROOT / "latest.json")
     add_text("latest.md", ROOT / "latest.md")
+    # docs (manuals & playbooks — private inside encrypted vault)
+    docs_dir = ROOT / "docs"
+    if docs_dir.exists():
+        for p in sorted(docs_dir.rglob("*")):
+            if p.is_file():
+                rel = str(p.relative_to(ROOT)).replace(os.sep, "/")
+                if p.suffix == ".json":
+                    add_json(rel, p)
+                else:
+                    add_text(rel, p)
     # history (tiny)
     hist = ROOT / "history"
     if hist.exists():
