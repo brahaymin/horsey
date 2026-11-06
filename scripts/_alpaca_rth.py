@@ -30,6 +30,18 @@ LATEST = ROOT / "latest.json"
 WATCHER = ROOT / "scripts" / "alpaca_rth_watcher.py"
 LOCK = Path("/tmp/horsey_alpaca_rth_watcher.lock")
 
+
+def _gov_close(ticket_id, exit_price, kind, opened_ct=None, notes=None):
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_pod_governance", str(ROOT / "scripts" / "_pod_governance.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.on_position_closed(ticket_id, float(exit_price), kind, opened_ct)
+    except Exception as e:
+        if notes is not None:
+            notes.append(f"gov_close_warn:{ticket_id}:{e}")
+
 DONE_STATUSES = {
     "submitted_paper", "filled_paper", "closed_paper", "invalidated_paper", "expired_paper",
 }
@@ -546,6 +558,7 @@ def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dic
                 pe.alpaca_request("POST", pe.ALPACA_PAPER_HOST, "/v2/orders", body=body)
                 append_event(events_doc, kind, tid, headline, detail, "neg" if "STOP" in kind or "TIME" in kind or "EOD" in kind else "pos", occ)
                 rewrite_blotter_ticket(tid, lambda t: {**t, "status": "closed_paper", "alpaca_exit_kind": kind, "alpaca_exit_ct": _iso_ct()})
+                _gov_close(tid, mark or entry or 0, kind, ticket.get("alpaca_filled_ct"), notes)
                 notes.append(f"{kind}:{tid}")
             except Exception as e:
                 notes.append(f"exit_fail:{tid}:{e}")
@@ -826,6 +839,13 @@ def alpaca_rth_tick(pe, force_sim: bool = False, push_if_changed: bool = False,
     result["armed_tickets"] = events_doc["armed_tickets"]
     result["events_count"] = len(events_doc.get("events") or [])
     result["changed"] = changed
+    try:
+        import importlib.util as _ilu
+        _sp = _ilu.spec_from_file_location("_pod_governance", str(ROOT / "scripts" / "_pod_governance.py"))
+        _gm = _ilu.module_from_spec(_sp); _sp.loader.exec_module(_gm)
+        _gm.compute_portfolio_snapshot(); _gm.check_limits(); _gm.ensure_armed_queue()
+    except Exception as _e:
+        result["governance_warn"] = str(_e)[:200]
     push_info = push_vault_if_changed(pe, changed, push_if_changed)
     result["vault"] = push_info
     return result

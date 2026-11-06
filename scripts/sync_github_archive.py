@@ -538,5 +538,19 @@ def main():
         print("GH_AUTH_PENDING: committed locally & mirrored to persistent store; will push automatically once gh is authenticated.")
 
 
+
+def _refresh_governance():
+    try:
+        import importlib.util
+        from pathlib import Path as _P
+        root = _P(__file__).resolve().parents[1]
+        spec = importlib.util.spec_from_file_location("_pod_governance", str(root / "scripts" / "_pod_governance.py"))
+        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+        mod.compute_portfolio_snapshot(); mod.check_limits(); mod.ensure_armed_queue(); mod.rebuild_weekly_summary()
+    except Exception as e:
+        print("governance refresh skipped:", e)
+
 if __name__ == "__main__":
+    import atexit
+    atexit.register(_refresh_governance)
     main()

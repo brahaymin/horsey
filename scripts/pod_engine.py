@@ -935,6 +935,15 @@ def alpaca_stage_ticket(ticket_id, dry_run=True, submit_paper=False, expiration=
 
 
 
+
+def _gov():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_pod_governance", P("scripts", "_pod_governance.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def maybe_rebuild_vault_state():
     """If CEO vault is active, refresh vault/state.enc.json (never fatal)."""
     try:
@@ -1002,6 +1011,33 @@ def main(argv=None):
                      help="Rebuild vault/state.enc.json and git push when execution state changes")
     art.add_argument("--ensure-watcher", action="store_true",
                      help="Spawn alpaca_rth_watcher.py detached if RTH window and lock free")
+
+    ct = sp.add_parser("close-ticket")
+    ct.add_argument("--ticket-id", required=True)
+    ct.add_argument("--exit-price", type=float, required=True)
+    ct.add_argument("--opened-ct"); ct.add_argument("--closed-ct")
+    ct.add_argument("--exit-reason", default="manual_close",
+                    choices=["target1_target2","stop_hit","invalidation_hit","time_stop","eod_0dte_flat","manual_close"])
+    ct.add_argument("--primary-driver", choices=["delta","gamma","vega","timing_execution","thesis_wrong","pending_fill"])
+    ct.add_argument("--lesson"); ct.add_argument("--apply-learning", action="store_true")
+    cr = sp.add_parser("complete-review")
+    cr.add_argument("--ticket-id", required=True)
+    cr.add_argument("--primary-driver", required=True, choices=["delta","gamma","vega","timing_execution","thesis_wrong","pending_fill"])
+    cr.add_argument("--lesson", required=True)
+    cr.add_argument("--weight-delta", type=float)
+    cr.add_argument("--regime-tag", choices=["short_gamma_backwardation","positive_gamma_contango","below_200sma"])
+    sp.add_parser("portfolio-risk")
+    sp.add_parser("check-limits")
+    sp.add_parser("track-record")
+    sp.add_parser("build-reviews-index")
+    rd = sp.add_parser("record-decision")
+    rd.add_argument("--kill-switch-action", choices=["reset_clear","raise_daily_1_5","raise_weekly_3_0","raise_open_1_5"])
+    rd.add_argument("--note", default="")
+    rd.add_argument("file", nargs="?")
+    t.add_argument("--auto-reduce", action="store_true", default=True)
+    t.add_argument("--no-auto-reduce", action="store_true")
+    t.add_argument("--strict-block", action="store_true")
+
     a = ap.parse_args(argv)
     if a.cmd in ("status", "log-signal", "grade"):
         _housekeeping()
@@ -1018,6 +1054,8 @@ def main(argv=None):
     elif a.cmd == "status":
         print(status())
     elif a.cmd == "size-ticket":
+        if getattr(a, "no_auto_reduce", False):
+            a.auto_reduce = False
         tk = size_ticket(a)
         if a.stage_paper and tk["verdict"] == "APPROVED_FOR_STAGING":
             ajl(BLOTTER, tk); tk["staged"] = True
@@ -1072,7 +1110,32 @@ def main(argv=None):
         print(json.dumps(result, indent=2))
         return 0
 
-    return 0
+    elif a.cmd == "close-ticket":
+        g = _gov()
+        rev = g.close_ticket(a.ticket_id, a.exit_price, a.opened_ct, a.closed_ct, a.exit_reason,
+                             a.primary_driver, a.lesson, a.apply_learning)
+        print(json.dumps(rev, indent=2)); maybe_rebuild_vault_state(); return 0
+    elif a.cmd == "complete-review":
+        g = _gov(); rev = g.complete_review(a.ticket_id, a.primary_driver, a.lesson, a.weight_delta, a.regime_tag)
+        print(json.dumps(rev, indent=2)); maybe_rebuild_vault_state(); return 0
+    elif a.cmd == "portfolio-risk":
+        print(json.dumps(_gov().compute_portfolio_snapshot(), indent=2)); maybe_rebuild_vault_state(); return 0
+    elif a.cmd == "check-limits":
+        print(json.dumps(_gov().check_limits(), indent=2)); maybe_rebuild_vault_state(); return 0
+    elif a.cmd == "track-record":
+        g = _gov(); g.ensure_armed_queue(); print(json.dumps(g.rebuild_weekly_summary(), indent=2)); maybe_rebuild_vault_state(); return 0
+    elif a.cmd == "build-reviews-index":
+        print(json.dumps(_gov().build_reviews_index(), indent=2)); maybe_rebuild_vault_state(); return 0
+    elif a.cmd == "record-decision":
+        g = _gov()
+        if getattr(a, "kill_switch_action", None):
+            print(json.dumps(g.record_kill_switch_decision(a.kill_switch_action, a.note or ""), indent=2))
+        elif getattr(a, "file", None):
+            print(json.dumps({"ok": True, "file": a.file}, indent=2))
+        else:
+            raise SystemExit("record-decision requires --kill-switch-action or file")
+        maybe_rebuild_vault_state(); return 0
+
     return 0
 
 

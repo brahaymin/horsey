@@ -198,6 +198,12 @@ def collect_state_files() -> dict:
         "pod/ledger/signals.jsonl",
         "pod/paper_account_state.json",
         "pod/paper_execution_events.json",
+        "pod/reviews/reviews_index.json",
+        "pod/risk/limits.json",
+        "pod/risk/portfolio_snapshot.json",
+        "pod/track_record/weekly_summary.json",
+        "pod/track_record/armed_rules_queue.json",
+        "pod/track_record/rules_registry.json",
         "pod/alpaca_last_dry_run.json",
         "pod/state.json",  # optional alias some UIs expect
     ]
