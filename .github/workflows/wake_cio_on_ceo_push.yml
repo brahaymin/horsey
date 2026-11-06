@@ -1,0 +1,30 @@
+name: Wake CIO on CEO Decision Push
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pod/ceo_decisions/**'
+jobs:
+  wake-cio:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest decisions
+        uses: actions/checkout@v4
+      - name: Relay CEO decision push to CIO webhook
+        env:
+          HORSEY_CIO_WEBHOOK_URL: ${{ secrets.HORSEY_CIO_WEBHOOK_URL }}
+          HORSEY_CIO_WEBHOOK_KEY: ${{ secrets.HORSEY_CIO_WEBHOOK_KEY }}
+        run: |
+          if [ -z "$HORSEY_CIO_WEBHOOK_URL" ] || [ -z "$HORSEY_CIO_WEBHOOK_KEY" ]; then
+            echo "Notice: HORSEY_CIO_WEBHOOK_URL or HORSEY_CIO_WEBHOOK_KEY secret not set; skipping instant webhook relay."
+            exit 0
+          fi
+          if [ ! -f "pod/ceo_decisions/latest_decisions.json" ]; then
+            echo "Notice: pod/ceo_decisions/latest_decisions.json not found; skipping."
+            exit 0
+          fi
+          curl -fsS -X POST "$HORSEY_CIO_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $HORSEY_CIO_WEBHOOK_KEY" \
+            -H "X-Webhook-Secret: $HORSEY_CIO_WEBHOOK_KEY" \
+            --data-binary @pod/ceo_decisions/latest_decisions.json

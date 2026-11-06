@@ -41,6 +41,43 @@ SALT_LEN = 16
 IV_LEN = 12
 
 
+# --- shared repo lock (git/vault hygiene) -------------------------------------------------
+# Self-contained (no import-path fragility). Reentrant across child processes via env flag:
+# a holder exports HORSEY_REPO_LOCK_HELD=<pid> so subprocesses (vault_crypto, pod_engine) skip re-locking.
+import contextlib as _ctxlib, fcntl as _fcntl, time as _time
+REPO_SYNC_LOCK = "/tmp/horsey_repo_sync.lock"
+
+
+@_ctxlib.contextmanager
+def repo_sync_lock(lock_path=REPO_SYNC_LOCK, timeout_sec=120, label=""):
+    if os.environ.get("HORSEY_REPO_LOCK_HELD"):
+        yield True
+        return
+    fd = open(lock_path, "a+")
+    t0 = _time.time(); warned = False
+    while True:
+        try:
+            _fcntl.flock(fd.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if _time.time() - t0 > timeout_sec:
+                fd.close()
+                raise TimeoutError(f"repo_sync_lock timeout after {timeout_sec}s ({label})")
+            if not warned:
+                print(f"repo_sync_lock: waiting for {lock_path} ({label})", file=sys.stderr); warned = True
+            _time.sleep(1)
+    os.environ["HORSEY_REPO_LOCK_HELD"] = str(os.getpid())
+    try:
+        yield True
+    finally:
+        os.environ.pop("HORSEY_REPO_LOCK_HELD", None)
+        try:
+            _fcntl.flock(fd.fileno(), _fcntl.LOCK_UN)
+        finally:
+            fd.close()
+# -------------------------------------------------------------------------------------------
+
+
 def b64e(b: bytes) -> str:
     return base64.b64encode(b).decode("ascii")
 
@@ -576,6 +613,13 @@ def main(argv=None):
     act = sp.add_parser("activate")
     act.add_argument("--write-env", action="store_true", help="Force rewrite .env.vault from env password")
     a = ap.parse_args(argv)
+    if a.cmd in ("build", "build-state", "activate"):
+        with repo_sync_lock(label="vault_crypto " + a.cmd, timeout_sec=300):
+            return _dispatch(a)
+    return _dispatch(a)
+
+
+def _dispatch(a):
     if a.cmd == "build":
         return cmd_build(a)
     if a.cmd == "build-state":

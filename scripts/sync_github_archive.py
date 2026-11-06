@@ -91,6 +91,43 @@ Free, zero-login interactive dashboard (GitHub Pages) with a historical snapshot
 """
 
 
+# --- shared repo lock (git/vault hygiene) -------------------------------------------------
+# Self-contained (no import-path fragility). Reentrant across child processes via env flag:
+# a holder exports HORSEY_REPO_LOCK_HELD=<pid> so subprocesses (vault_crypto, pod_engine) skip re-locking.
+import contextlib as _ctxlib, fcntl as _fcntl, time as _time
+REPO_SYNC_LOCK = "/tmp/horsey_repo_sync.lock"
+
+
+@_ctxlib.contextmanager
+def repo_sync_lock(lock_path=REPO_SYNC_LOCK, timeout_sec=120, label=""):
+    if os.environ.get("HORSEY_REPO_LOCK_HELD"):
+        yield True
+        return
+    fd = open(lock_path, "a+")
+    t0 = _time.time(); warned = False
+    while True:
+        try:
+            _fcntl.flock(fd.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if _time.time() - t0 > timeout_sec:
+                fd.close()
+                raise TimeoutError(f"repo_sync_lock timeout after {timeout_sec}s ({label})")
+            if not warned:
+                print(f"repo_sync_lock: waiting for {lock_path} ({label})", file=sys.stderr); warned = True
+            _time.sleep(1)
+    os.environ["HORSEY_REPO_LOCK_HELD"] = str(os.getpid())
+    try:
+        yield True
+    finally:
+        os.environ.pop("HORSEY_REPO_LOCK_HELD", None)
+        try:
+            _fcntl.flock(fd.fileno(), _fcntl.LOCK_UN)
+        finally:
+            fd.close()
+# -------------------------------------------------------------------------------------------
+
+
 def rnd(v, n=4):
     return round(v, n) if isinstance(v, (int, float)) else None
 
@@ -280,7 +317,7 @@ def write_index(ts_ct):
 
 
 
-def main():
+def _main_unlocked():
     # Pull CEO decisions committed from the web app before writing anything (avoids push conflicts)
     try:
         if subprocess.run(["gh", "auth", "status"], capture_output=True, text=True).returncode == 0:
@@ -548,6 +585,13 @@ def main():
     else:
         print("GH_AUTH_PENDING: committed locally & mirrored to persistent store; will push automatically once gh is authenticated.")
 
+
+
+def main():
+    # Whole pull → write → vault build → commit → push sequence is serialized with the
+    # Alpaca RTH tick and manual deploys via /tmp/horsey_repo_sync.lock
+    with repo_sync_lock(label="sync_github_archive", timeout_sec=600):
+        return _main_unlocked()
 
 if __name__ == "__main__":
     main()

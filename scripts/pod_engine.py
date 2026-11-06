@@ -433,7 +433,18 @@ def build_memos_index():
            "roles": [{"role": r, "label": next((s[3] for s in MEMO_SOURCES if s[2] == r), "SPY Gamma Raw Data Report"), "count": len(by_role[r])} for r in ROLE_ORDER],
            "latest_cio_briefing": "pod/cio_briefings/latest.md" if os.path.exists(P("pod", "cio_briefings", "latest.md")) else None,
            "by_role": by_role, "by_run": sorted(runs.values(), key=lambda r: r["run_id"], reverse=True), "memos": items}
-    wj(P("pod", "memos_index.json"), idx)
+    # Idempotent: if nothing but generated_ct would change, keep the file (and mtime) untouched
+    ip = P("pod", "memos_index.json")
+    if os.path.exists(ip):
+        try:
+            with open(ip) as f:
+                old = json.load(f)
+            strip = lambda d: {k: v for k, v in d.items() if k != "generated_ct"}
+            if json.loads(json.dumps(strip(idx))) == strip(old):
+                return old
+        except Exception:
+            pass
+    wj(ip, idx)
     return idx
 
 
@@ -945,6 +956,87 @@ def _gov():
     return mod
 
 
+# --- shared repo lock (git/vault hygiene) -------------------------------------------------
+# Self-contained (no import-path fragility). Reentrant across child processes via env flag:
+# a holder exports HORSEY_REPO_LOCK_HELD=<pid> so subprocesses (vault_crypto, pod_engine) skip re-locking.
+import contextlib as _ctxlib, fcntl as _fcntl, time as _time
+REPO_SYNC_LOCK = "/tmp/horsey_repo_sync.lock"
+
+
+@_ctxlib.contextmanager
+def repo_sync_lock(lock_path=REPO_SYNC_LOCK, timeout_sec=120, label=""):
+    if os.environ.get("HORSEY_REPO_LOCK_HELD"):
+        yield True
+        return
+    fd = open(lock_path, "a+")
+    t0 = _time.time(); warned = False
+    while True:
+        try:
+            _fcntl.flock(fd.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if _time.time() - t0 > timeout_sec:
+                fd.close()
+                raise TimeoutError(f"repo_sync_lock timeout after {timeout_sec}s ({label})")
+            if not warned:
+                print(f"repo_sync_lock: waiting for {lock_path} ({label})", file=sys.stderr); warned = True
+            _time.sleep(1)
+    os.environ["HORSEY_REPO_LOCK_HELD"] = str(os.getpid())
+    try:
+        yield True
+    finally:
+        os.environ.pop("HORSEY_REPO_LOCK_HELD", None)
+        try:
+            _fcntl.flock(fd.fileno(), _fcntl.LOCK_UN)
+        finally:
+            fd.close()
+# -------------------------------------------------------------------------------------------
+
+
+CEO_DIR_REL = ("pod", "ceo_decisions")
+
+
+def _ceo_pull_safely(timeout=10):
+    """Best-effort git pull (under repo lock); never fatal."""
+    import subprocess
+    try:
+        with repo_sync_lock(label="ceo-push pull", timeout_sec=30):
+            r = subprocess.run(["git", "pull", "--rebase", "--autostash", "origin", "main"], cwd=ROOT,
+                               capture_output=True, text=True, timeout=timeout)
+            return {"pulled": r.returncode == 0, "detail": (r.stdout or r.stderr or "").strip()[:160]}
+    except Exception as e:
+        return {"pulled": False, "detail": str(e)[:160]}
+
+
+def check_ceo_push(pull=True):
+    out = {}
+    if pull:
+        out["pull"] = _ceo_pull_safely()
+    latest = rj(P(*CEO_DIR_REL, "latest_decisions.json"), {}) or {}
+    last = rj(P(*CEO_DIR_REL, ".last_processed.json"), {}) or {}
+    lsub = latest.get("submitted_ct"); psub = last.get("last_submitted_ct")
+    def _ts(x):
+        try:
+            return datetime.strptime(x, "%Y-%m-%dT%H:%M:%S%z")
+        except Exception:
+            return None
+    unp = bool(lsub) and (not psub or (_ts(lsub) and _ts(psub) and _ts(lsub) > _ts(psub)) or (lsub != psub and not (_ts(lsub) and _ts(psub))))
+    out.update({"unprocessed_ceo_push": bool(unp), "last_processed_submitted_ct": psub, "latest_submitted_ct": lsub,
+                "ceo_push_summary": ({k: latest.get(k) for k in ("submitted_ct", "prompt_set_id", "risk_pct", "ceo_note")} if unp else {})})
+    return out
+
+
+def mark_ceo_push_processed(submitted_ct=None, handled_by="cli_mark_ceo_push_processed"):
+    latest = rj(P(*CEO_DIR_REL, "latest_decisions.json"), {}) or {}
+    sub = submitted_ct or latest.get("submitted_ct")
+    if not sub:
+        raise SystemExit("no submitted_ct available")
+    rec = {"last_submitted_ct": sub, "prompt_set_id": latest.get("prompt_set_id") if sub == latest.get("submitted_ct") else None,
+           "processed_ct": iso_ct(), "handled_by": handled_by}
+    wj(P(*CEO_DIR_REL, ".last_processed.json"), rec)
+    return rec
+
+
 def maybe_rebuild_vault_state():
     """If CEO vault is active, refresh vault/state.enc.json (never fatal)."""
     try:
@@ -1306,6 +1398,9 @@ def main(argv=None):
     cr.add_argument("--regime-tag", choices=["short_gamma_backwardation","positive_gamma_contango","below_200sma"])
     sp.add_parser("portfolio-risk")
     sp.add_parser("check-limits")
+    ccp = sp.add_parser("check-ceo-push", help="Is there an unprocessed CEO decision push? (read-only)")
+    ccp.add_argument("--no-pull", action="store_true"); ccp.add_argument("--pull", action="store_true")
+    mcp = sp.add_parser("mark-ceo-push-processed"); mcp.add_argument("--submitted-ct")
     sp.add_parser("track-record")
     sp.add_parser("build-reviews-index")
     rd = sp.add_parser("record-decision")
@@ -1402,7 +1497,24 @@ def main(argv=None):
             push_if_changed=bool(getattr(a, "push_if_changed", False)),
             ensure_watcher_flag=bool(getattr(a, "ensure_watcher", False)),
         )
+        try:
+            _stamp = "/tmp/horsey_ceo_pull.stamp"; _due = (not os.path.exists(_stamp)) or (_time.time() - os.path.getmtime(_stamp) > 120)
+            if _due:
+                open(_stamp, "w").close()
+            cp = check_ceo_push(pull=_due)  # throttled pull (≤1 per 2 min); never marks .last_processed.json
+            if isinstance(result, dict):
+                result["unprocessed_ceo_push"] = cp["unprocessed_ceo_push"]
+                result["ceo_push_summary"] = cp["ceo_push_summary"]
+        except Exception as e:
+            if isinstance(result, dict):
+                result["unprocessed_ceo_push"] = False; result["ceo_push_error"] = str(e)[:160]
         print(json.dumps(result, indent=2))
+        return 0
+    elif a.cmd == "check-ceo-push":
+        print(json.dumps(check_ceo_push(pull=not a.no_pull), indent=2))
+        return 0
+    elif a.cmd == "mark-ceo-push-processed":
+        print(json.dumps(mark_ceo_push_processed(a.submitted_ct), indent=2))
         return 0
 
     elif a.cmd == "close-ticket":

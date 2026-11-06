@@ -628,23 +628,25 @@ def push_vault_if_changed(pe, changed: bool, push: bool) -> Dict[str, Any]:
     if not changed and not push:
         return out
     try:
-        pe.maybe_rebuild_vault_state()
+        with pe.repo_sync_lock(label="alpaca_rth_tick build-state", timeout_sec=90):
+            pe.maybe_rebuild_vault_state()
         out["vault_built"] = True
     except Exception as e:
         out["vault_error"] = str(e)[:200]
     if push and changed:
         try:
-            subprocess.run(["git", "add", "-f", "--", "vault/state.enc.json", "vault/manifest.json"], cwd=str(ROOT), check=False)
-            # only commit if staged diff
-            st = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=str(ROOT), capture_output=True, text=True)
-            if "vault/state.enc.json" in (st.stdout or "") or "vault/manifest.json" in (st.stdout or ""):
-                subprocess.run(
-                    ["git", "commit", "-m", "vault: refresh state after Alpaca RTH tick"],
-                    cwd=str(ROOT), check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                subprocess.run(["git", "push", "origin", "main"], cwd=str(ROOT), check=False,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                out["pushed"] = True
+          with pe.repo_sync_lock(label="alpaca_rth_tick push", timeout_sec=90):
+              subprocess.run(["git", "add", "-f", "--", "vault/state.enc.json", "vault/manifest.json"], cwd=str(ROOT), check=False)
+              # only commit if staged diff
+              st = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=str(ROOT), capture_output=True, text=True)
+              if "vault/state.enc.json" in (st.stdout or "") or "vault/manifest.json" in (st.stdout or ""):
+                  subprocess.run(
+                      ["git", "commit", "-m", "vault: refresh state after Alpaca RTH tick"],
+                      cwd=str(ROOT), check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                  )
+                  subprocess.run(["git", "push", "origin", "main"], cwd=str(ROOT), check=False,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                  out["pushed"] = True
         except Exception as e:
             out["push_error"] = str(e)[:200]
     return out

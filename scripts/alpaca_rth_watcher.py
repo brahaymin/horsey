@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Background RTH watcher — at most one instance (fcntl lock). Loops every 30s during RTH."""
+"""Background RTH watcher — at most one instance (fcntl lock). Loops every 30s during RTH.
+
+Repo lock hygiene: this loop itself never touches git or the vault. Each tick spawns a FRESH
+`pod_engine.py alpaca-rth-tick` subprocess; that child takes /tmp/horsey_repo_sync.lock
+(repo_sync_lock in pod_engine.py / _alpaca_rth.py) around build-state + git add/commit/push and the
+CEO-decision pull. The watcher must NOT hold that lock while waiting on the child (it would deadlock),
+so a running watcher picks up the lock automatically on its next tick — no restart required.
+"""
 from __future__ import annotations
 import fcntl, os, subprocess, sys, time
 from datetime import datetime, timedelta, timezone
