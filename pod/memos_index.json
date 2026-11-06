@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "generated_ct": "2026-11-05T19:13:14-0600",
-  "count": 5,
+  "generated_ct": "2026-11-05T19:21:34-0600",
+  "count": 6,
   "roles": [
     {
       "role": "cio",
       "label": "CIO Executive Briefing",
-      "count": 1
+      "count": 2
     },
     {
       "role": "ptj",
@@ -32,6 +32,7 @@
   "latest_cio_briefing": "pod/cio_briefings/latest.md",
   "by_role": {
     "cio": [
+      "cio:2026-11-05_1919-ceo-decisions",
       "cio:2026-11-05_1712-post-close"
     ],
     "ptj": [
@@ -49,6 +50,14 @@
   },
   "by_run": [
     {
+      "run_id": "2026-11-05_1919-ceo-decisions",
+      "display_ct": "Thu Nov 05, 2026 \u00b7 7:19 PM CT \u00b7 ceo-decisions",
+      "session_date": "2026-11-05",
+      "memos": {
+        "cio": "cio:2026-11-05_1919-ceo-decisions"
+      }
+    },
+    {
       "run_id": "2026-11-05_1712-post-close",
       "display_ct": "Thu Nov 05, 2026 \u00b7 5:12 PM CT \u00b7 post-close",
       "session_date": "2026-11-05",
@@ -62,6 +71,20 @@
     }
   ],
   "memos": [
+    {
+      "id": "cio:2026-11-05_1919-ceo-decisions",
+      "role": "cio",
+      "label": "CIO Executive Briefing",
+      "agent_name": "CIO & Risk Gatekeeper",
+      "title": "CIO Execution & Risk Directive \u2014 CEO Decisions Applied \u00b7 Thu Nov 5, 2026 7:19 PM CT",
+      "display_ct": "Thu Nov 05, 2026 \u00b7 7:19 PM CT \u00b7 ceo-decisions",
+      "session_date": "2026-11-05",
+      "run_id": "2026-11-05_1919-ceo-decisions",
+      "sort_key": "2026-11-05T1919",
+      "path": "pod/cio_briefings/2026-11-05_1919-ct-ceo-decisions_cio_briefing.md",
+      "bytes": 3938,
+      "summary_line": "Prior briefing: pod/ciobriefings/2026-11-051712-ct-post-closeciobriefing.md"
+    },
     {
       "id": "cio:2026-11-05_1712-post-close",
       "role": "cio",

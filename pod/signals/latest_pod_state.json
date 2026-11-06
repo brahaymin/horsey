@@ -1,7 +1,7 @@
 {
   "disclaimer": "Regime Stance & Conditional Structural Triggers (Paper / Architecture Demo \u2014 Not Live Financial Advice)",
   "as_of_ct": "2026-11-05T17:12:12-0600",
-  "updated_ct": "2026-11-05T19:00:37-0600",
+  "updated_ct": "2026-11-05T19:19:00-0600",
   "market": {
     "spy_close": 733.0,
     "sma200": 730.15,
@@ -36,13 +36,13 @@
       ],
       "last_signal_id": "SIG-13A01000",
       "last_signal_ct": "2026-11-05T18:44:37-0600",
-      "last_note": "STAND-DOWN primary. Memos: pod/ptj_macro/2026-11-05_1712-ct-post-close_thesis.json|.md. Ledger appended. No pod_engine size-ticket until trigger prints.",
+      "last_note": "STAND-DOWN primary. Memos: pod/ptj_macro/2026-11-05_1712-ct-post-close_thesis.json|.md. Ledger appended. No pod_engine size-ticket until trigger prints. | CEO did not pre-approve Scenario B (PTJ macro short) \u2014 remain FLAT_DEFENSE_STAND_DOWN.",
       "primary_bias": "flat_defense_stand_down",
       "memo_md": "pod/ptj_macro/2026-11-05_1712-ct-post-close_thesis.md"
     },
     "ee33b632-6c42-4d43-bf17-665bc939db17": {
       "name": "Intraday Tape & Gamma Tactician",
-      "stance": "active_watch_short_gamma_OR_continuation_Fri_RTH",
+      "stance": "CEO PRE-APPROVED CONDITIONAL \u2014 ITT-2026-11-06-A staged (0.25%)",
       "headline": "Dealers short gamma (0DTE -$2.66B, 45D -$13.85B) with SPY below the $735 0DTE put wall; RVOL 2.95\u00d7 means moves get amplified, not dampened.",
       "observations": [
         "$735 node: 23,652 put OI vs 387 call OI \u2014 now overhead after the break.",
@@ -55,13 +55,13 @@
       ],
       "last_signal_id": "SIG-CFD2DF60",
       "last_signal_ct": "2026-11-05T18:40:16-0600",
-      "last_note": "Setup ITT-2026-11-06-A PRIMARY: Fri RTH short after 30m OR \u2014 break/hold below OR_low AND 732.71, OR reject 735-740. Hard invalidation OR_high or 740. Time stop 45-60m / flat 0DTE by 14:45 CT. Size 0.25% (VIX throttle). Source latest.json 2026-11-05T17:12:12-0600. Market CLOSED \u2014 watch only until Fri open. Memo: pod/intraday_tape_gamma/latest.json",
-      "primary_bias": "short_trend_continuation_watch_friday_rth",
+      "last_note": "CEO 19:18 CT pre-approved Scenario A only. Ticket TKT-ITT-2026-11-06-A staged conditional: 2\u00d7 SPY puts @1.85 / stop 1.25 / T1 3.65 / T2 4.85 / $120 risk on $50k (0.25% eff). Trigger Fri RTH 30m OR break&hold < OR_low & 732.71 OR reject 735\u2013740. Invalidation OR_high or 740. Time stop 45\u201360m / flat 14:45 CT. ITT-B stand_down.",
+      "primary_bias": "short_trend_continuation_conditional_preapproved_friday",
       "memo_md": "pod/intraday_tape_gamma/2026-11-05_1712-ct-post-close_thesis.md"
     },
     "e44fa805-3796-4f84-8366-30901208f4ab": {
       "name": "Buffett Value Compounder",
-      "stance": "PATIENT ACCUMULATION WATCH \u2014 shopping list active; GOOGL/META conditional on AI capex ROIC",
+      "stance": "HOLD CASH \u2014 CEO wait for full-FCF 25\u201335% MoS",
       "headline": "Panic in semis (-12.25%) can push quality compounders toward 25%\u201335% margin-of-safety zones; banks' milder drop says this is not a credit event yet.",
       "observations": [
         "Short-gamma liquidations sell good and bad businesses alike \u2014 the value buyer's opportunity set.",
@@ -74,8 +74,8 @@
       ],
       "last_signal_id": "SIG-E009AAED",
       "last_signal_ct": "2026-11-05T18:45:00-0600",
-      "last_note": "Memo at pod/buffett_value/2026-11-05_1712-ct-post-close_thesis.md. Most quality compounders still above 25%-35% MoS zones (MSFT 377/327, NVDA 98/85, AVGO 148/128, TSM 172/149, V 209/181, AAPL 127/110, JPM 219/190, BRK-B 392/339). GOOGL ($282.57) and META ($605.08) clear 25% MoS only on maintenance-capex owner earnings, not full FCF. Wash-sale check awaits data/robinhood_options.csv.",
-      "primary_bias": "conditional_accumulate_GOOGL_META_else_wait",
+      "last_note": "CEO 19:18 CT: Wait Patiently \u2014 hold cash for full-FCF 25\u201335% Margin of Safety. No GOOGL/META tranches staged. Wash-sale check remains deferred.",
+      "primary_bias": "hold_cash_wait_full_fcf_mos",
       "memo_md": "pod/buffett_value/2026-11-05_1712-ct-post-close_thesis.md"
     },
     "6b3e6d50-8be6-43f5-afa8-24338fa062f5": {
@@ -85,7 +85,7 @@
     }
   },
   "cio_synthesis": {
-    "summary": "All three specialist memos now on bus. PTJ = flat defense stand-down (no >=5:1 live). Intraday = Friday short-gamma continuation watch. Buffett = patient MoS shopping list. Regime = short_gamma_backwardation. Throttle 0.25%\u20130.50%; PTJ requires >=5R.",
+    "summary": "CEO decisions recorded 2026-11-05T19:18:12-0600 CT (CEO-Q-2026-11-05-POSTCLOSE). (1) Tactical risk 0.25%/shot, 0.50% ceiling. (2) Scenario A ITT-2026-11-06-A pre-approved \u2014 conditional paper ticket TKT-ITT-2026-11-06-A staged (2 SPY puts, $120 risk / $50k). Scenarios B/C stand_down. (3) Buffett bucket hold_cash for full-FCF 25\u201335% MoS \u2014 no GOOGL/META tranches. Regime short_gamma_backwardation; VIX throttle active.",
     "risk_throttle_pct": [
       0.25,
       0.5
@@ -93,11 +93,32 @@
     "regime_tags": [
       "short_gamma_backwardation",
       "knife_edge_above_200sma"
+    ],
+    "ceo_applied_ct": "2026-11-05T19:19:00-0600",
+    "staged_tickets": [
+      "TKT-ITT-2026-11-06-A"
+    ],
+    "stand_down": [
+      "ITT-2026-11-06-B",
+      "scenario_b",
+      "scenario_c",
+      "buffett_GOOGL_META"
     ]
   },
   "specialist_memo_dirs": [
     "pod/intraday_tape_gamma/",
     "pod/buffett_value/",
     "pod/ptj_macro/"
-  ]
+  ],
+  "ceo_decisions_ref": {
+    "prompt_set_id": "CEO-Q-2026-11-05-POSTCLOSE",
+    "submitted_ct": "2026-11-05T19:18:12-0600",
+    "status": "submitted",
+    "risk_pct_per_shot": 0.25,
+    "risk_ceiling_pct": 0.5,
+    "preapproved": [
+      "ITT-2026-11-06-A"
+    ],
+    "buffett": "hold_cash_wait_full_fcf_25_35_mos"
+  }
 }
