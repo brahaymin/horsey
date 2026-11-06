@@ -172,6 +172,40 @@ def main():
     assets={s:metrics(v[0],asof) for s,v in ys.items()};spy=assets['SPY']
     # If a holiday, use the most recent completed SPY session for comparison.
     if spy.get('session') and not a.asof:asof=dt.date.fromisoformat(spy['session'])
+    # LIVE overlay (only when not pinned by --asof and not --offline replay): if Yahoo has a fresher
+    # session row (today's partial daily bar, or a regularMarketPrice stamped today) than the completed
+    # session, recompute metrics through today so close/1D%/SMA distances are live intraday. The prior
+    # completed close is preserved as regular_close/completed_session. Futures keep their own logic.
+    live_session=None
+    today_ny=local.date();session_open=local.time()<dt.time(16,0)
+    live_mode=(not a.offline) and (not a.asof or (asof>=today_ny and session_open))
+    if live_mode:
+        for s_,(h_,meta_,intra_) in list(ys.items()):
+            if s_.endswith('=F') or h_ is None or h_.empty:continue
+            try:
+                hh=h_.dropna(subset=['Close']).copy();tz=hh.index.tz
+                rmp=meta_.get('regularMarketPrice');rmt=meta_.get('regularMarketTime')
+                qts=pd.Timestamp(rmt) if rmt not in (None,'None','') else None
+                if qts is not None and qts.tzinfo is None:qts=qts.tz_localize(UTC)
+                qd=qts.tz_convert(NY).date() if qts is not None else None
+                if qd==today_ny and rmp and session_open:
+                    if hh.index[-1].date()==qd:hh.loc[hh.index[-1],'Close']=float(rmp)
+                    elif hh.index[-1].date()<qd:
+                        ix=pd.Timestamp(dt.datetime.combine(qd,dt.time(0)));ix=ix.tz_localize(tz) if tz is not None else ix
+                        hh.loc[ix,['Open','High','Low','Close','Volume']]=[float(rmp)]*4+[0];hh=hh.sort_index()
+                if not session_open or hh.index[-1].date()!=today_ny:continue
+                hc=hh[[d<today_ny for d in hh.index.date]]
+                if len(hc)<2:continue
+                comp=metrics(hc,hc.index[-1].date());lm=metrics(hh,today_ny)
+                if lm.get('status')!='ok':continue
+                lm.update({'live':True,'quote_session':today_ny.isoformat(),'intraday_quote':lm.get('close'),'quote_time':str(rmt) if rmt else None,
+                           'regular_close':comp.get('close'),'completed_session':comp.get('session'),'completed':comp,
+                           'volume_partial_session':True,'note_live':'close/returns/SMA distances use live delayed intraday quote vs prior completed close; volume is partial-session (volume_average_prior_20 excludes today)'})
+                if s_=='SPY' and spy.get('cboe_quote'):lm['cboe_quote']=spy['cboe_quote']
+                assets[s_]=lm;live_session=today_ny
+            except Exception as e:errors.append({'source':'live_overlay','symbol':s_,'error':str(e)})
+        spy=assets['SPY']
+        if live_session and spy.get('live') and not a.asof:asof=dt.date.fromisoformat(spy['completed_session'])
     cboe=fetch_json(BASE+'options/SPY.json','cboe_SPY_options.json');alt=fetch_json(BASE+'options/_SPY.json','cboe__SPY_options.json')
     quote=fetch_json(BASE+'quotes/SPY.json','quotes_SPY.json');vol={}
     for s in ['_VIX','_VVIX','_VIX9D','_VIX3M','_SOX','_BKX']:
@@ -186,16 +220,17 @@ def main():
     options={'status':'unavailable'}
     if cboe:
         ft=dt.datetime.fromisoformat(cboe['timestamp']).replace(tzinfo=UTC);rows,excluded=chain_rows(cboe,now)
-        if (now-ft).total_seconds()>36*3600 or ft.astimezone(NY).date()!=asof:
-            options={'status':'stale_or_not_asof','chain_timestamp':cboe['timestamp'],'requested_session':asof.isoformat()}
+        options_asof=live_session or asof
+        if (now-ft).total_seconds()>36*3600 or ft.astimezone(NY).date()!=options_asof:
+            options={'status':'stale_or_not_asof','chain_timestamp':cboe['timestamp'],'requested_session':options_asof.isoformat()}
         else:
             spot=float(cboe['data']['current_price']);dates=sorted(set(o['expiry'] for o in rows));nextday=dates[0] if dates else None
-            month=asof.replace(day=1);fridays=[month+dt.timedelta(days=i) for i in range(31) if (month+dt.timedelta(days=i)).month==month.month and (month+dt.timedelta(days=i)).weekday()==4];opex=fridays[2]
-            if opex<asof:
+            month=options_asof.replace(day=1);fridays=[month+dt.timedelta(days=i) for i in range(31) if (month+dt.timedelta(days=i)).month==month.month and (month+dt.timedelta(days=i)).weekday()==4];opex=fridays[2]
+            if opex<options_asof:
                 month=(month+dt.timedelta(days=32)).replace(day=1);fridays=[month+dt.timedelta(days=i) for i in range(28) if (month+dt.timedelta(days=i)).weekday()==4];opex=fridays[2]
             groups={'upcoming_45d':[o for o in rows if o['dte']<=45],'upcoming_all':rows,'next_session':[o for o in rows if o['expiry']==nextday],'monthly_opex':[o for o in rows if o['expiry']==opex.isoformat()]}
             options={'status':'ok','chain_timestamp':cboe['timestamp'],'timestamp_timezone_assumed':'UTC for top-level Cboe cache timestamp; naive contract times are America/New_York','gex_spot':spot,'close_spot_sensitivity':spy.get('close') or cboe['data']['close'],'exclusions':excluded,'next_session_expiry':nextday,'monthly_opex_expiry':opex.isoformat(),'units':'USD delta-notional change for 1% underlying move','dealer_assumption':'long call gamma / short put gamma; OI-side proxy only, not actual dealer inventory','formula':'sign * gamma * open_interest * 100 * spot^2 * 0.01','scopes':{k:scope(v,spot,now,a.rate,a.dividend_yield) for k,v in groups.items()}}
-            for z in options['scopes'].values():z['net_gex_rescaled_to_regular_close_same_gamma']=z['totals']['net_gex']*((spy.get('close') or cboe['data']['close'])/spot)**2
+            for z in options['scopes'].values():z['net_gex_rescaled_to_regular_close_same_gamma']=z['totals']['net_gex']*((spy.get('regular_close') or spy.get('close') or cboe['data']['close'])/spot)**2
             if not a.offline:
                 try:
                     oc=yf.Ticker('SPY').option_chain(nextday);cross=[]
@@ -224,7 +259,7 @@ def main():
     term={'vix_over_vix3m':vx/v3 if vx and v3 else None,'vix9d_minus_vix':v9-vx if vx and v9 else None,'vix_minus_vix3m':vx-v3 if vx and v3 else None,'regime':'backwardated_implied_volatility_tenors' if vx and v3 and vx>v3 else 'contango_implied_volatility_tenors' if vx and v3 else 'unavailable','note':'spot implied-volatility horizons, NOT a VIX futures curve'}
     headlines=[]
     if Path(a.headlines_json).exists():headlines=[x for x in json.loads(Path(a.headlines_json).read_text()) if x.get('session')==asof.isoformat()]
-    result={'schema_version':'1.0','generated_at_utc':now.isoformat(),'requested_completed_session':asof.isoformat(),'replay_mode':a.offline,'spy':spy,'options_gex':options,'volatility':{'term_structure':term,'cboe_crosschecks':vol},'assets':assets,'futures':futures,'verified_headlines':headlines,'headlines_status':'dated manually verified public reporting; no automatic claim of verification' if headlines else 'unavailable; supply dated verified article metadata via --headlines-json','sources':sources,'data_normalizations':adjustments,'errors':errors,'methodology':{'sma':'arithmetic mean of last N unadjusted Close observations through completed session; source quotes snapped to 0.0001 to suppress Yahoo float32 artifacts; no dividends adjustment','returns':'close-to-close; 1, 5, 20 trading observations; split-adjusted Yahoo OHLC, dividends unadjusted','volume':'session shares / mean prior 20 completed sessions, excluding today; share volume is NOT signed fund flow','gamma_flip':'reprice all unexpired gammas at trial spot using frozen IV Black-Scholes; cumulative strike crossing separately named and is not a dealer zero-gamma spot','data_limits':'public delayed data; OI typically prior session and not verified intraday; rounded source gamma; actual dealer position unknown; no level independently validates actual dealer hedging','rate_and_dividend':'explicit configurable model assumptions, NOT measured market inputs'}}
+    result={'schema_version':'1.0','generated_at_utc':now.isoformat(),'requested_completed_session':asof.isoformat(),'live_quote_session':live_session.isoformat() if live_session else None,'spy_regular_close':spy.get('regular_close',spy.get('close')),'replay_mode':a.offline,'spy':spy,'options_gex':options,'volatility':{'term_structure':term,'cboe_crosschecks':vol},'assets':assets,'futures':futures,'verified_headlines':headlines,'headlines_status':'dated manually verified public reporting; no automatic claim of verification' if headlines else 'unavailable; supply dated verified article metadata via --headlines-json','sources':sources,'data_normalizations':adjustments,'errors':errors,'methodology':{'sma':'arithmetic mean of last N unadjusted Close observations through completed session; source quotes snapped to 0.0001 to suppress Yahoo float32 artifacts; no dividends adjustment','returns':'close-to-close; 1, 5, 20 trading observations; split-adjusted Yahoo OHLC, dividends unadjusted','volume':'session shares / mean prior 20 completed sessions, excluding today; share volume is NOT signed fund flow','gamma_flip':'reprice all unexpired gammas at trial spot using frozen IV Black-Scholes; cumulative strike crossing separately named and is not a dealer zero-gamma spot','data_limits':'public delayed data; OI typically prior session and not verified intraday; rounded source gamma; actual dealer position unknown; no level independently validates actual dealer hedging','rate_and_dividend':'explicit configurable model assumptions, NOT measured market inputs'}}
     lines=['# SPY Gamma Structure & Regime Snapshot',f'Generated {now.isoformat()} | completed session {asof} | replay={a.offline}','', '| Symbol | Close | 1D % | 5D % | 20D % | Volume | Vol / prior20 | 200 SMA |','|---|---:|---:|---:|---:|---:|---:|---:|']
     fmt=lambda v,n=4:'NA' if v is None else f'{v:,.{n}f}'
     for s in SYMS:
@@ -239,7 +274,7 @@ def main():
     lines+=['','## Methodology and limitations']+[f'- {k}: {v}' for k,v in result['methodology'].items()]
     lines+=['','## Verified dated headlines']+[f"- [{h['title']}]({h['url']}): {h['summary']}" for h in headlines]
     lines+=['','## SPY price / moving averages']
-    lines.append(f"- Regular close: {spy.get('close')}; day change: {spy.get('change_dollars')}; volume: {spy.get('volume')}; prior-20 mean: {spy.get('volume_average_prior_20')}; relative volume: {spy.get('volume_vs_prior_20')}")
+    lines.append(f"- Regular close: {spy.get('regular_close',spy.get('close'))}; live quote: {spy.get('intraday_quote')}; day change: {spy.get('change_dollars')}; volume: {spy.get('volume')}; prior-20 mean: {spy.get('volume_average_prior_20')}; relative volume: {spy.get('volume_vs_prior_20')}")
     if quote:lines.append(f"- Delayed current/post-close quote: {quote['data'].get('current_price')} (cache timestamp {quote.get('timestamp')}; exact post-close tick time not verified)")
     for n,z in spy.get('sma',{}).items():lines.append(f"- SMA {n}: {z['value']}; close distance: ${z['distance_dollars']} / {z['distance_pct']}%")
     lines+=['','## Overnight futures (new session from 18:00 ET)','| Symbol | Quote | Quote time | Displayed change | Displayed change % | Inferred quote reference | New-session low | New-session high | Change vs 16:59 close % |','|---|---:|---|---:|---:|---:|---:|---:|---:|']

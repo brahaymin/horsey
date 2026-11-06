@@ -138,6 +138,71 @@ def inline_local_scripts(html: str) -> str:
     )
 
 
+INLINE_SNAPSHOTS = 2
+SNAP_ENC_DIR = VAULT_DIR / "snapshots"
+
+
+def all_snapshot_files() -> list:
+    """Every snapshots/YYYY/MM/YYYY-MM-DD/*.json|*.md (excludes snapshots/index.json)."""
+    root = ROOT / "snapshots"
+    if not root.exists():
+        return []
+    out = []
+    for p in sorted(root.rglob("*")):
+        if p.is_file() and p.suffix in (".json", ".md") and p.parent != root:
+            out.append(p)
+    return out
+
+
+def newest_snapshot_jsons(n: int) -> list:
+    """Newest n snapshot json rel paths: prefer snapshots/index.json order, else path sort."""
+    idx = ROOT / "snapshots" / "index.json"
+    rels = []
+    try:
+        for s in json.loads(idx.read_text()).get("snapshots") or []:
+            jp = s.get("json_path")
+            if jp and (ROOT / jp).exists() and jp not in rels:
+                rels.append(jp)
+    except Exception:
+        rels = []
+    if not rels:
+        rels = [str(p.relative_to(ROOT)).replace(os.sep, "/") for p in all_snapshot_files() if p.suffix == ".json"]
+        rels.sort(reverse=True)  # YYYY/MM/YYYY-MM-DD/HHMM sorts chronologically
+    return rels[:n]
+
+
+def sync_encrypted_snapshots(password: str, meta: dict) -> dict:
+    """Incremental, idempotent per-snapshot encryption into vault/snapshots/<rel>.enc.json.
+
+    Skip when dest exists, dest salt == current vault salt, and dest src_sha256 matches source
+    (sha256 of plaintext source; reveals nothing beyond content-identity). Re-encrypt on salt
+    rotation or source change. Existing files stay byte-identical otherwise.
+    """
+    created = updated = skipped = 0
+    for src in all_snapshot_files():
+        rel = str(src.relative_to(ROOT)).replace(os.sep, "/")  # snapshots/...
+        dest = VAULT_DIR / (rel + ".enc.json")
+        raw = src.read_bytes()
+        sha = hashlib.sha256(raw).hexdigest()
+        if dest.exists():
+            try:
+                env = json.loads(dest.read_text())
+                if env.get("salt") == meta["salt"] and env.get("src_sha256") == sha:
+                    skipped += 1
+                    continue
+            except Exception:
+                pass
+            updated += 1
+        else:
+            created += 1
+        env = encrypt_blob(password, raw, meta)
+        env["src_sha256"] = sha
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(env, separators=(",", ":")) + "\n")
+    total = len(list(SNAP_ENC_DIR.rglob("*.enc.json"))) if SNAP_ENC_DIR.exists() else 0
+    return {"created": created, "updated": updated, "skipped": skipped, "total_encrypted": total}
+
+
 def collect_state_files() -> dict:
     """Build virtual file map for vault/state.enc.json."""
     files: dict = {}
@@ -181,24 +246,17 @@ def collect_state_files() -> dict:
                     add_json(rel, p)
                 else:
                     add_text(rel, p)
-    # snapshots: index + newest ~20 json (+ matching md if small)
+    # snapshots: index + only the INLINE_SNAPSHOTS newest (json+md) inline; older ones are
+    # served on demand from vault/snapshots/<path>.enc.json (see sync_encrypted_snapshots)
     snap_root = ROOT / "snapshots"
     if snap_root.exists():
         add_json("snapshots/index.json", snap_root / "index.json")
-        jsons = sorted(snap_root.rglob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        # always keep index separate; take up to 20 content snapshots
-        n = 0
-        for p in jsons:
-            rel = str(p.relative_to(ROOT)).replace(os.sep, "/")
-            if rel == "snapshots/index.json":
-                continue
-            add_json(rel, p)
+        for jp in newest_snapshot_jsons(INLINE_SNAPSHOTS):
+            p = ROOT / jp
+            add_json(jp, p)
             md = p.with_suffix(".md")
             if md.exists() and md.stat().st_size < 200_000:
                 add_text(str(md.relative_to(ROOT)).replace(os.sep, "/"), md)
-            n += 1
-            if n >= 20:
-                break
 
     # Pod — everything briefings/pod need
     pod = ROOT / "pod"
@@ -378,8 +436,9 @@ def cmd_build(args):
     meta = ensure_meta()
     app = build_app(pw, meta)
     st = build_state(pw, meta)
+    snaps = sync_encrypted_snapshots(pw, meta)
     man = write_manifest()
-    print(json.dumps({"ok": True, "app": app, "state": st, "manifest": man, "meta": {"salt": meta["salt"][:8] + "…", "iter": meta["iter"]}}, indent=2))
+    print(json.dumps({"ok": True, "app": app, "state": st, "snapshots": snaps, "manifest": man, "meta": {"salt": meta["salt"][:8] + "…", "iter": meta["iter"]}}, indent=2))
     return 0
 
 
@@ -390,8 +449,9 @@ def cmd_build_state(args):
         return 0
     meta = ensure_meta()
     st = build_state(pw, meta)
+    snaps = sync_encrypted_snapshots(pw, meta)
     man = write_manifest()
-    print(json.dumps({"ok": True, "state": st, "manifest": man}, indent=2))
+    print(json.dumps({"ok": True, "state": st, "snapshots": snaps, "manifest": man}, indent=2))
     return 0
 
 
@@ -400,12 +460,12 @@ GITIGNORE_EXTRA = """
 app_unlocked.html
 vault_gate.html
 .env.vault
-js/
+/js/
 latest.json
 latest.md
-history/
-snapshots/
-docs/
+/history/
+/snapshots/
+/docs/
 README.md
 """
 
@@ -459,10 +519,13 @@ def cmd_activate(args):
         )
     # Ensure vault + gate index are addable
     subprocess.run(["git", "add", "-f", "--", "index.html", "vault/app.enc.json", "vault/state.enc.json", "vault/vault_meta.json", "vault/manifest.json", ".gitignore", ".nojekyll"], cwd=str(ROOT), check=False)
+    if SNAP_ENC_DIR.exists():
+        subprocess.run(["git", "add", "--", "vault/snapshots"], cwd=str(ROOT), check=False)
 
     meta = ensure_meta()
     app = build_app(pw, meta)
     st = build_state(pw, meta)
+    snaps = sync_encrypted_snapshots(pw, meta)
     man = write_manifest()
     # Verify working tree intact
     intact = all((ROOT / x).exists() for x in ["app_unlocked.html", "js/feed-adapter.js", "latest.json", "pod/memos_index.json"])
@@ -471,6 +534,7 @@ def cmd_activate(args):
         "working_tree_intact": intact,
         "app": app,
         "state": st,
+        "snapshots": snaps,
         "manifest": man,
         "note": "Ready to commit+push when you choose. No push performed by activate.",
     }, indent=2))

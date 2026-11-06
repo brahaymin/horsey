@@ -16,10 +16,10 @@ __pycache__/
 app_unlocked.html
 vault_gate.html
 .env.vault
-js/
+/js/
 latest.json
 latest.md
-history/
-snapshots/
-docs/
+/history/
+/snapshots/
+/docs/
 README.md

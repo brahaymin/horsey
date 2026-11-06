@@ -186,7 +186,8 @@ def build_enrichment(snap, spy, assets, futs, cboe_cur):
     sma = spy.get("sma", {})
     session = spy.get("session") or snap.get("requested_completed_session")
     spy_detail = {
-        "close": spy.get("close"), "current_price": cboe_cur, "open": spy.get("open"), "high": spy.get("high"),
+        "close": spy.get("close"), "regular_close": spy.get("regular_close", spy.get("close")),
+        "live": bool(spy.get("live")), "quote_session": spy.get("quote_session"), "current_price": cboe_cur, "open": spy.get("open"), "high": spy.get("high"),
         "low": spy.get("low"), "previous_close": spy.get("previous_close"), "change_dollars": spy.get("change_dollars"),
         "d1_pct": rnd(safe_get(spy, "returns_pct", "1")), "d5_pct": rnd(safe_get(spy, "returns_pct", "5")),
         "d20_pct": rnd(safe_get(spy, "returns_pct", "20")), "volume": spy.get("volume"),
@@ -347,8 +348,10 @@ def main():
     def top_wall(arr):
         return arr[0]["strike"] if arr else None
 
-    spy_close = spy.get("close")
-    cboe_cur = safe_get(spy, "cboe_quote", "data", "current_price") or og.get("gex_spot") or spy_close
+    # Live intraday overlay (spy_gamma_monitor sets live=True + regular_close during RTH/pre-market)
+    spy_live = spy.get("close") if spy.get("live") else None
+    spy_close = spy.get("regular_close", spy.get("close"))  # prior COMPLETED regular-session close
+    cboe_cur = spy_live or safe_get(spy, "cboe_quote", "data", "current_price") or og.get("gex_spot") or spy_close
     sma200 = safe_get(spy, "sma", "200", "value")
     sma200_d = safe_get(spy, "sma", "200", "distance_dollars")
     sma200_p = safe_get(spy, "sma", "200", "distance_pct")
@@ -395,6 +398,7 @@ def main():
         "smh_1d_pct": rnd(safe_get(assets, "SMH", "returns_pct", "1"), 4),
         "bkx_1d_pct": rnd(safe_get(assets, "^BKX", "returns_pct", "1"), 4),
         "kbwb_1d_pct": rnd(safe_get(assets, "KBWB", "returns_pct", "1"), 4),
+        "live_quote_session": snap.get("live_quote_session"),
         "es_quote": safe_get(futs, "ES=F", "quote", "price"),
         "nq_quote": safe_get(futs, "NQ=F", "quote", "price"),
     }
@@ -504,16 +508,23 @@ def main():
     subprocess.run(["git", "add", "-A"], cwd=REPO_DIR, check=True)
     if vault_active:
         # Ensure encrypted artifacts are staged even if ignore rules drift
-        subprocess.run(["git", "add", "-f", "--", "vault/state.enc.json", "vault/app.enc.json", "vault/vault_meta.json", "index.html"], cwd=REPO_DIR, check=False)
+        subprocess.run(["git", "add", "-f", "--", "vault/state.enc.json", "vault/app.enc.json", "vault/vault_meta.json", "vault/manifest.json", "index.html"], cwd=REPO_DIR, check=False)
+        # On-demand per-snapshot encrypted files (immutable; only new/changed ones show up)
+        if os.path.isdir(os.path.join(REPO_DIR, "vault", "snapshots")):
+            subprocess.run(["git", "add", "--", "vault/snapshots"], cwd=REPO_DIR, check=False)
     # Safety: ensure nothing under pod/ was staged
     staged = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=REPO_DIR, capture_output=True, text=True, check=False)
-    bad = [ln for ln in (staged.stdout or "").splitlines() if ln.startswith("pod/") or ln == "pod"]
+    _plain = ("snapshots/", "history/", "docs/", "js/")
+    _plain_files = ("latest.json", "latest.md", "app_unlocked.html", "vault_gate.html", "README.md")
+    bad = [ln for ln in (staged.stdout or "").splitlines()
+           if (ln.startswith("pod/") and not ln.startswith("pod/ceo_decisions/")) or ln.startswith(_plain)
+           or ln in _plain_files or os.path.basename(ln).startswith(".env")]
     if bad:
-        subprocess.run(["git", "reset", "HEAD", "--", "pod"], cwd=REPO_DIR, check=False)
+        subprocess.run(["git", "reset", "HEAD", "--"] + bad, cwd=REPO_DIR, check=False)
         print("WARNING: unstaged private pod/ paths:", bad)
     status = subprocess.run(["git", "status", "--porcelain"], cwd=REPO_DIR, capture_output=True, text=True, check=True)
     if status.stdout.strip():
-        msg = f"SPY gamma snapshot {dt_ct.strftime('%Y-%m-%d %H:%M CT')} ({run_tag}: SPY ${spy_close:.2f}, 45D GEX {s_45d['totals']['net_gex']/1e9:.2f}B, VIX {flat_row['vix']})"
+        msg = f"SPY gamma snapshot {dt_ct.strftime('%Y-%m-%d %H:%M CT')} ({run_tag}: SPY ${(flat_row['spy_price'] or spy_close or 0):.2f}, 45D GEX {s_45d['totals']['net_gex']/1e9:.2f}B, VIX {flat_row['vix']})"
         subprocess.run(["git", "commit", "-m", msg], cwd=REPO_DIR, check=True)
         print("COMMITTED:", msg)
     else:
