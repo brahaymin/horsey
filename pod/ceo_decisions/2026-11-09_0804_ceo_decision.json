@@ -1,0 +1,21 @@
+{
+  "prompt_set_id": "CEO-Q-2026-11-06-POSTCLOSE",
+  "status": "submitted",
+  "submitted_ct": "2026-11-09T08:04:00-0600",
+  "saved_ct": "2026-11-09T08:04:00-0600",
+  "session_target": "2026-11-09",
+  "briefing_ref": "pod/cio_briefings/2026-11-06_1525-ct-post-close_cio_briefing.md",
+  "responses": {
+    "risk_budget": "0.25_shot_0.50_cap",
+    "approved_scenarios": [
+      "scenario_a",
+      "scenario_b",
+      "scenario_c"
+    ],
+    "income_and_value_focus": "tax_roc_dashboard_and_wash_sale"
+  },
+  "risk_pct": 0.25,
+  "ceo_note": "",
+  "last_ceo_note": "",
+  "source": "Grok Bot chat (CIO desk)"
+}
