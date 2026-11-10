@@ -547,29 +547,14 @@ def _main_unlocked():
             print("vault state rebuilt")
         except Exception as e:
             print("vault build-state failed:", e)
-    # Respect .gitignore (pod/ is private; vault plaintext ignored when active). Never `git add -f pod`.
-    subprocess.run(["git", "add", "-A"], cwd=REPO_DIR, check=True)
-    if vault_active:
-        # Ensure encrypted artifacts are staged even if ignore rules drift
-        subprocess.run(["git", "add", "-f", "--", "vault/state.enc.json", "vault/app.enc.json", "vault/vault_meta.json", "vault/manifest.json", "index.html"], cwd=REPO_DIR, check=False)
-        # On-demand per-snapshot encrypted files (immutable; only new/changed ones show up)
-        if os.path.isdir(os.path.join(REPO_DIR, "vault", "snapshots")):
-            subprocess.run(["git", "add", "--", "vault/snapshots"], cwd=REPO_DIR, check=False)
-    # Safety: ensure nothing under pod/ was staged
-    staged = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=REPO_DIR, capture_output=True, text=True, check=False)
-    _plain = ("snapshots/", "history/", "docs/", "js/")
-    _plain_files = ("latest.json", "latest.md", "app_unlocked.html", "vault_gate.html", "README.md")
-    bad = [ln for ln in (staged.stdout or "").splitlines()
-           if (ln.startswith("pod/") and not ln.startswith("pod/ceo_decisions/")) or ln.startswith(_plain)
-           or ln in _plain_files or os.path.basename(ln).startswith(".env")]
-    if bad:
-        subprocess.run(["git", "reset", "HEAD", "--"] + bad, cwd=REPO_DIR, check=False)
-        print("WARNING: unstaged private pod/ paths:", bad)
-    status = subprocess.run(["git", "status", "--porcelain"], cwd=REPO_DIR, capture_output=True, text=True, check=True)
-    if status.stdout.strip():
+    # Explicit allowlist (Nov 10 2026): stage ONLY what this script publishes. No `git add -A`, no -f.
+    ok_to_publish, staged_now = stage_allowlist(REPO_DIR)
+    if not ok_to_publish:
+        print("NO_COMMIT_NO_PUSH: allowlist refusal (see REFUSED above)")
+    elif staged_now:
         msg = f"SPY gamma snapshot {dt_ct.strftime('%Y-%m-%d %H:%M CT')} ({run_tag}: SPY ${(flat_row['spy_price'] or spy_close or 0):.2f}, 45D GEX {s_45d['totals']['net_gex']/1e9:.2f}B, VIX {flat_row['vix']})"
         subprocess.run(["git", "commit", "-m", msg], cwd=REPO_DIR, check=True)
-        print("COMMITTED:", msg)
+        print("COMMITTED:", msg, "| paths:", len(staged_now))
     else:
         print("NO_CHANGES")
 
@@ -584,13 +569,59 @@ def _main_unlocked():
 
     # Push via gh/git if gh CLI is authenticated
     gh_check = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True)
-    if gh_check.returncode == 0:
+    if not ok_to_publish:
+        print("PUSH_SKIPPED: allowlist refusal")
+    elif gh_check.returncode == 0:
         subprocess.run(["gh", "auth", "setup-git"], check=False)
         push = subprocess.run(["git", "push", "-u", "origin", "main"], cwd=REPO_DIR, capture_output=True, text=True)
         print("PUSH_RC:", push.returncode, push.stdout.strip(), push.stderr.strip())
     else:
         print("GH_AUTH_PENDING: committed locally & mirrored to persistent store; will push automatically once gh is authenticated.")
 
+
+
+# ----------------------------------------------------------------------------------------------
+# Publish allowlist: exactly the tracked outputs this script writes. Derived from its own
+# commit history plus the code: encrypted vault artifacts, the gate index.html, and the two
+# script mirrors copied in from /workspace. Plaintext (pod/, snapshots/, history/, docs/,
+# latest.*, README.md) is gitignored and never staged.
+PUBLISH_ALLOWLIST_FILES = (
+    "index.html",
+    "vault/state.enc.json",
+    "vault/manifest.json",
+    "vault/app.enc.json",
+    "vault/vault_meta.json",
+    "scripts/spy_gamma_monitor.py",
+    "scripts/sync_github_archive.py",
+)
+PUBLISH_ALLOWLIST_DIRS = ("vault/snapshots/",)
+
+
+def in_publish_allowlist(path):
+    return path in PUBLISH_ALLOWLIST_FILES or any(path.startswith(d) for d in PUBLISH_ALLOWLIST_DIRS)
+
+
+def stage_allowlist(repo_dir):
+    """Stage allowlisted paths only (`git add -- <paths>`, never -A, never -f), then verify the
+    whole index. If anything outside the allowlist is staged, unstage everything, print
+    REFUSED and return (False, staged). Returns (True, staged_allowlisted_paths) otherwise."""
+    tracked = set((subprocess.run(["git", "ls-files", "--", *PUBLISH_ALLOWLIST_FILES, *PUBLISH_ALLOWLIST_DIRS],
+                                  cwd=repo_dir, capture_output=True, text=True).stdout or "").split())
+    paths = [p for p in PUBLISH_ALLOWLIST_FILES if os.path.exists(os.path.join(repo_dir, p)) or p in tracked]
+    paths += [d.rstrip("/") for d in PUBLISH_ALLOWLIST_DIRS
+              if os.path.isdir(os.path.join(repo_dir, d)) or any(t.startswith(d) for t in tracked)]
+    if paths:
+        r = subprocess.run(["git", "add", "--", *paths], cwd=repo_dir, capture_output=True, text=True)
+        if r.returncode != 0:
+            print("WARNING: git add (allowlist) rc", r.returncode, (r.stderr or "").strip()[:200])
+    staged = [l for l in (subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=repo_dir,
+                                         capture_output=True, text=True).stdout or "").splitlines() if l.strip()]
+    outside = [p for p in staged if not in_publish_allowlist(p)]
+    if outside:
+        subprocess.run(["git", "reset", "-q", "--", *staged], cwd=repo_dir, check=False)
+        print("REFUSED: paths outside publish allowlist were staged; unstaged all, skipping commit+push:", outside[:20])
+        return False, staged
+    return True, staged
 
 
 def main():
