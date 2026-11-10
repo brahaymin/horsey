@@ -1,39 +1,9 @@
 {
-  "prompt_set_id": "CEO-Q-2026-11-09-POSTCLOSE",
-  "status": "submitted",
-  "submitted_ct": "2026-11-09T19:18:00-0600",
-  "saved_ct": "2026-11-09T19:18:00-0600",
-  "session_target": "2026-11-10",
-  "briefing_ref": "pod/cio_briefings/2026-11-09_1530-ct-post-close_cio_briefing.md",
-  "responses": {
-    "risk_budget": "0.25_shot_0.50_cap",
-    "approved_scenarios": [
-      "scenario_d",
-      "scenario_e",
-      "scenario_f"
-    ],
-    "margin_apr": "5.25% under $50K; first $1K free (Gold)",
-    "student_debt_payoff_target": null
-  },
-  "risk_pct": 0.25,
-  "max_total_open_risk_pct": 1.5,
-  "ceo_note": "D, E, and F. Approve them all. Open risk ceiling raised to 1.5% earlier same evening.",
-  "last_ceo_note": "Student-debt monthly payoff target still unanswered.",
-  "source": "Grok Bot chat (CIO desk)",
-  "applied_ct": "2026-11-09T19:18:00-0600",
-  "applied_by": "cio_risk_gatekeeper",
-  "application": {
-    "tactical_risk_pct_per_shot": 0.25,
-    "tactical_risk_ceiling_pct_per_ticket": 0.5,
-    "max_total_open_risk_pct": 1.5,
-    "max_daily_realized_loss_pct_unchanged": 1.0,
-    "preapproved_setups": [
-      "ITT-2026-11-10-D",
-      "ITT-2026-11-10-E",
-      "ITT-2026-11-10-F"
-    ],
-    "mutual_exclusion": "E and F are mutually exclusive directionally; only one may be live at a time",
-    "margin_apr_note": "5.25% under $50K; first $1K free",
-    "student_debt_payoff_target": "UNANSWERED \u2014 leave open"
-  }
+  "prompt_set_id": "CEO-Q-2026-11-10-POSTCLOSE",
+  "status": "pending_ceo_input",
+  "submitted_ct": null,
+  "responses": {},
+  "ceo_note": "",
+  "session_target": "2026-11-11",
+  "briefing_ref": "pod/cio_briefings/2026-11-10_1530-ct-post-close_cio_briefing.md"
 }
