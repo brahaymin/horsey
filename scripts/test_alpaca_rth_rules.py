@@ -289,5 +289,184 @@ class TickIntegration(unittest.TestCase):
         self.assertFalse(any(str(a).startswith("invalidated:") for a in res["actions"]))
 
 
+# --------------------------------------------------------------------------- vault sync flow
+import contextlib
+import json as _json
+import shutil
+import subprocess
+
+
+def _g(cwd, *a, check=True):
+    r = subprocess.run(["git", *a], cwd=str(cwd), capture_output=True, text=True)
+    if check and r.returncode != 0:
+        raise AssertionError(f"git {a} failed: {r.stderr}")
+    return r
+
+
+class _FakePE:
+    """Stands in for pod_engine: a no-op lock and a synthetic vault builder."""
+    def __init__(self, root):
+        self.root = Path(root); self.data = "d0"; self.tick = 0; self.on_rebuild = None
+
+    @contextlib.contextmanager
+    def repo_sync_lock(self, label="", timeout_sec=0):
+        yield True
+
+    def maybe_rebuild_vault_state(self):
+        self.tick += 1
+        if self.on_rebuild:
+            self.on_rebuild(self)
+        (self.root / "vault" / "state.enc.json").write_text(_json.dumps({"data": self.data, "ts": self.tick}) + "\n")
+        (self.root / "vault" / "manifest.json").write_text(_json.dumps({"ts": self.tick}) + "\n")
+
+
+def _fp(root, rev):
+    """Fake semantic fingerprint: the 'data' field only (ts is volatile)."""
+    if rev:
+        r = _g(root, "show", f"{rev}:vault/state.enc.json", check=False)
+        return _json.loads(r.stdout)["data"] if r.returncode == 0 else None
+    return _json.loads((Path(root) / "vault" / "state.enc.json").read_text())["data"]
+
+
+class VaultSync(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="rth_vault_test_"))
+        self._env = {k: os.environ.get(k) for k in ("HOME", "GIT_CONFIG_NOSYSTEM", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+                                                     "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")}
+        os.environ.update({"HOME": str(self.tmp), "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+                           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"})
+        self.origin = self.tmp / "origin.git"
+        _g(self.tmp, "init", "-q", "--bare", "-b", "main", str(self.origin))
+        seed = self.tmp / "seed"
+        _g(self.tmp, "clone", "-q", str(self.origin), str(seed))
+        (seed / "vault").mkdir(); (seed / "scripts").mkdir()
+        (seed / "vault" / "state.enc.json").write_text(_json.dumps({"data": "d0", "ts": 0}) + "\n")
+        (seed / "vault" / "manifest.json").write_text(_json.dumps({"ts": 0}) + "\n")
+        (seed / "index.html").write_text("<html>gate</html>\n")
+        (seed / "scripts" / "other.py").write_text("x = 1\n")
+        (seed / ".gitignore").write_text("pod/\n")
+        _g(seed, "add", "-A"); _g(seed, "commit", "-q", "-m", "seed"); _g(seed, "push", "-q", "origin", "HEAD:main")
+        self.a = self.tmp / "a"; self.b = self.tmp / "b"
+        _g(self.tmp, "clone", "-q", str(self.origin), str(self.a))
+        _g(self.tmp, "clone", "-q", str(self.origin), str(self.b))
+        self.pe = _FakePE(self.a)
+
+    def tearDown(self):
+        for k, v in self._env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def sync(self, now_offset=60, changed=False):
+        last = int(_g(self.a, "log", "-1", "--format=%ct").stdout.strip())
+        return rth.vault_sync_after_tick(self.pe, changed, True, root=self.a, fingerprint=_fp,
+                                         now_epoch=last + now_offset, heartbeat_sec=300)
+
+    def status(self, repo=None):
+        return _g(repo or self.a, "status", "--porcelain", "--untracked-files=all").stdout
+
+    def origin_head_state(self):
+        return _json.loads(_g(self.origin, "show", "main:vault/state.enc.json").stdout)
+
+    def b_push_state(self, data, extra=None):
+        _g(self.b, "pull", "-q", "--rebase", "origin", "main")
+        (self.b / "vault" / "state.enc.json").write_text(_json.dumps({"data": data, "ts": 999}) + "\n")
+        if extra:
+            (self.b / extra).write_text("from b\n")
+        _g(self.b, "add", "-A"); _g(self.b, "commit", "-q", "-m", f"b {data}"); _g(self.b, "push", "-q", "origin", "HEAD:main")
+
+    def test_meaningful_change_committed_pushed_clean(self):
+        self.pe.data = "d1"
+        out = self.sync()
+        self.assertTrue(out["pulled"]); self.assertTrue(out["committed"]); self.assertTrue(out["pushed"])
+        self.assertEqual(out["commit_kind"], "change")
+        self.assertEqual(self.origin_head_state()["data"], "d1")
+        self.assertEqual(self.status(), ""); self.assertTrue(out["tree_clean"])
+
+    def test_timestamp_only_within_window_restored(self):
+        before = _g(self.a, "rev-parse", "HEAD").stdout
+        out = self.sync(now_offset=60)
+        self.assertFalse(out["committed"]); self.assertIn("timestamp_only:restored_head", out["log"])
+        self.assertEqual(_g(self.a, "rev-parse", "HEAD").stdout, before)
+        self.assertEqual(self.status(), "")
+
+    def test_timestamp_only_heartbeat_after_window(self):
+        out = self.sync(now_offset=400)
+        self.assertTrue(out["committed"]); self.assertTrue(out["pushed"]); self.assertEqual(out["commit_kind"], "heartbeat")
+        self.assertEqual(self.status(), "")
+
+    def test_pull_happens_before_rebuild(self):
+        self.b_push_state("d0", extra="README.md")
+        seen = {}
+        self.pe.on_rebuild = lambda pe: seen.setdefault("readme", (pe.root / "README.md").exists())
+        self.pe.data = "d2"
+        out = self.sync()
+        self.assertTrue(seen["readme"]); self.assertTrue(out["pushed"]); self.assertEqual(self.status(), "")
+        self.assertEqual(self.origin_head_state()["data"], "d2")
+
+    def test_push_race_rebuilds_on_top_no_force(self):
+        def race(pe):
+            if pe.tick == 1:
+                self.b_push_state("from_b")
+        self.pe.on_rebuild = race
+        self.pe.data = "d3"
+        out = self.sync()
+        self.assertIn("push_fail_1", " ".join(out["log"]))
+        self.assertTrue(out["pushed"], out["log"])
+        hist = _g(self.origin, "log", "--format=%s", "main").stdout
+        self.assertIn("b from_b", hist)  # remote commit preserved, so no force push
+        self.assertEqual(self.origin_head_state()["data"], "d3")
+        self.assertEqual(self.status(), "")
+
+    def test_push_rejected_twice_gives_up_cleanly(self):
+        hook = self.origin / "hooks" / "pre-receive"
+        hook.write_text("#!/bin/sh\necho rejected-by-test >&2\nexit 1\n"); hook.chmod(0o755)
+        self.pe.data = "d4"
+        before = _g(self.a, "rev-parse", "HEAD").stdout
+        out = self.sync()
+        self.assertFalse(out["pushed"]); self.assertIn("push_gave_up", " ".join(out["log"]))
+        self.assertEqual(_g(self.a, "rev-parse", "HEAD").stdout, before)
+        self.assertEqual(self.status(), "")
+
+    def test_never_stages_outside_index_and_vault(self):
+        (self.a / "scripts" / "other.py").write_text("x = 2\n")
+        (self.a / "pod").mkdir(); (self.a / "pod" / "secret.json").write_text("{}\n")
+        (self.a / "notes.txt").write_text("scratch\n")
+        self.pe.data = "d5"
+        out = self.sync()
+        self.assertTrue(out["pushed"])
+        files = _g(self.a, "show", "--name-only", "--format=", "HEAD").stdout.split()
+        self.assertTrue(files and all(f == "index.html" or f.startswith("vault/") for f in files), files)
+        st = self.status()
+        self.assertIn(" M scripts/other.py", st); self.assertIn("?? notes.txt", st); self.assertNotIn("pod/", st)
+
+    def test_leftover_dirty_vault_does_not_block_pull(self):
+        (self.a / "vault" / "state.enc.json").write_text(_json.dumps({"data": "stale_local", "ts": 5}) + "\n")
+        self.b_push_state("remote_new")
+        out = self.sync()
+        self.assertTrue(out["pulled"], out["log"])
+        self.assertEqual(self.status(), "")
+
+    def test_semantic_change_deferred_within_60s_then_committed(self):
+        self.pe.data = "d6"
+        out = self.sync(now_offset=20)
+        self.assertFalse(out["committed"]); self.assertIn("semantic_change_deferred", out["log"]); self.assertEqual(self.status(), "")
+        out = self.sync(now_offset=70)
+        self.assertTrue(out["pushed"]); self.assertEqual(out["commit_kind"], "change")
+
+    def test_tick_changed_commits_immediately(self):
+        out = self.sync(now_offset=5, changed=True)
+        self.assertTrue(out["pushed"]); self.assertEqual(out["commit_kind"], "change"); self.assertEqual(self.status(), "")
+
+    def test_real_normaliser_ignores_volatile_keys(self):
+        a = {"updated_ct": "x", "positions": [{"symbol": "SPY", "qty": "1", "current_price": "1", "unrealized_pl": "2"}]}
+        b = {"updated_ct": "y", "positions": [{"symbol": "SPY", "qty": "1", "current_price": "3", "unrealized_pl": "9"}]}
+        self.assertEqual(rth._normalize(a), rth._normalize(b))
+        b["positions"][0]["qty"] = "2"
+        self.assertNotEqual(rth._normalize(a), rth._normalize(b))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

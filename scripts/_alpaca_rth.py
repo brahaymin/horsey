@@ -985,33 +985,295 @@ def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dic
     return notes
 
 
-def push_vault_if_changed(pe, changed: bool, push: bool) -> Dict[str, Any]:
-    out = {"vault_built": False, "pushed": False}
-    if not changed and not push:
-        return out
+# ---------------------------------------------------------------------------
+# Tick vault sync (Nov 10 2026). Order, all under /tmp/horsey_repo_sync.lock:
+#   1) put back leftover derived vault/** artifacts (they are rebuilt anyway),
+#   2) git pull --rebase --autostash origin main,
+#   3) rebuild encrypted vault state (vault_crypto build-state),
+#   4) commit + push index.html / vault/** if the change is meaningful, or as a
+#      throttled heartbeat (at most 1 per VAULT_HEARTBEAT_SEC); else restore HEAD.
+# The working tree is clean between ticks. Never force-push, and never stage anything
+# outside index.html / vault/**.
+# ---------------------------------------------------------------------------
+VAULT_HEARTBEAT_SEC = int(os.environ.get("HORSEY_VAULT_HEARTBEAT_SEC", "300"))
+VAULT_ALLOWED = ("index.html", "vault/")
+VAULT_COMMIT_MSG = "vault: refresh state after Alpaca RTH tick"
+# Keys the builder/tick rewrite on every run; they carry no new information.
+VOLATILE_KEYS = {"updated_ct", "built_at", "updated_epoch",
+                 # broker mark-to-market fields that move on every quote
+                 "current_price", "lastday_price", "change_today", "market_value",
+                 "unrealized_pl", "unrealized_plpc", "unrealized_intraday_pl", "unrealized_intraday_plpc"}
+VOLATILE_PATH_KEYS = {
+    "pod/paper_execution_events.json": {"rth"},
+    "pod/paper_account_state.json": {"equity", "buying_power", "account"},
+    "pod/risk/portfolio_snapshot.json": {"spy_spot", "vix", "delta_exposure", "net_gex_45d",
+                                         "alpaca_paper_equity", "capital_at_risk"},
+}
+# Backstop: a semantic diff the tick didn't flag itself is committed at most this often.
+VAULT_SEMANTIC_MIN_SEC = int(os.environ.get("HORSEY_VAULT_SEMANTIC_MIN_SEC", "60"))
+
+
+def _git(root, *args, timeout=60):
+    return subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True, timeout=timeout)
+
+
+def _allowed_path(p: str) -> bool:
+    return p == "index.html" or p.startswith("vault/")
+
+
+def _porcelain(root, *paths) -> List[Tuple[str, str]]:
+    r = _git(root, "status", "--porcelain", "--untracked-files=all", "--", *paths)
+    out = []
+    for line in (r.stdout or "").splitlines():
+        if len(line) > 3:
+            out.append((line[:2], line[3:].strip().strip('"')))
+    return out
+
+
+def _restore_derived(root, paths: Optional[List[str]] = None) -> List[str]:
+    """Put vault/** (and optionally index.html) back to HEAD: tracked mods are checked out,
+    untracked derived files under vault/ are removed. Returns the touched paths."""
+    paths = paths or ["vault"]
+    touched = []
+    for st, p in _porcelain(root, *paths):
+        if not _allowed_path(p):
+            continue
+        touched.append(p)
+        if st == "??":
+            try:
+                (Path(root) / p).unlink()
+            except Exception:
+                pass
+        else:
+            _git(root, "reset", "-q", "--", p)
+            if _git(root, "cat-file", "-e", f"HEAD:{p}").returncode == 0:
+                _git(root, "checkout", "-q", "HEAD", "--", p)
+            else:
+                try:
+                    (Path(root) / p).unlink()
+                except Exception:
+                    pass
+    return touched
+
+
+def _normalize(obj, path_keys=frozenset()):
+    if isinstance(obj, dict):
+        return {k: _normalize(v) for k, v in obj.items() if k not in VOLATILE_KEYS and k not in path_keys}
+    if isinstance(obj, list):
+        return [_normalize(v) for v in obj]
+    return obj
+
+
+def vault_semantic_fingerprint(root, rev: Optional[str] = None) -> Optional[str]:
+    """sha256 of the decrypted vault state with timestamp-only keys removed.
+    rev=None reads the working tree; rev='HEAD' reads the committed blob. None on failure."""
+    import gzip, hashlib, importlib.util as _ilu
     try:
-        with pe.repo_sync_lock(label="alpaca_rth_tick build-state", timeout_sec=90):
-            pe.maybe_rebuild_vault_state()
+        if rev:
+            r = _git(root, "show", f"{rev}:vault/state.enc.json")
+            if r.returncode != 0:
+                return None
+            env = json.loads(r.stdout)
+        else:
+            env = json.loads((Path(root) / "vault" / "state.enc.json").read_text())
+        sp = _ilu.spec_from_file_location("_vault_crypto_fp", str(Path(root) / "scripts" / "vault_crypto.py"))
+        vc = _ilu.module_from_spec(sp); sp.loader.exec_module(vc)
+        pw = vc.load_password()
+        if not pw:
+            return None
+        raw = vc.decrypt_blob(pw, env)
+        try:
+            raw = gzip.decompress(raw)
+        except Exception:
+            pass
+        doc = json.loads(raw.decode("utf-8"))
+        files = doc.get("files") or {}
+        norm = {}
+        for k, v in files.items():
+            if isinstance(v, str):
+                try:
+                    v = json.loads(v)
+                except Exception:
+                    pass
+            norm[k] = _normalize(v, frozenset(VOLATILE_PATH_KEYS.get(k, ())))
+        blob = json.dumps({"files": norm, "aliases": doc.get("aliases")}, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    except Exception:
+        return None
+
+
+def _last_vault_commit_epoch(root) -> Optional[int]:
+    r = _git(root, "log", "-1", "--format=%ct", "HEAD", "--", "vault/state.enc.json")
+    try:
+        return int((r.stdout or "").strip())
+    except Exception:
+        return None
+
+
+def vault_sync_after_tick(pe, changed: bool, push: bool, root=None, fingerprint=None,
+                          now_epoch: Optional[float] = None, heartbeat_sec: Optional[int] = None,
+                          remote: str = "origin", branch: str = "main") -> Dict[str, Any]:
+    """Pull, rebuild, then commit/push the encrypted vault, all under the repo lock. Never raises."""
+    import time as _t
+    root = Path(root or ROOT)
+    fingerprint = fingerprint or vault_semantic_fingerprint
+    heartbeat_sec = VAULT_HEARTBEAT_SEC if heartbeat_sec is None else heartbeat_sec
+    out: Dict[str, Any] = {"vault_built": False, "pushed": False, "committed": False, "pulled": None, "log": []}
+    log = out["log"]
+
+    if not push:
+        # Manual/no-push runs keep the old behaviour: rebuild only, no git.
+        try:
+            with pe.repo_sync_lock(label="alpaca_rth_tick build-state", timeout_sec=90):
+                pe.maybe_rebuild_vault_state()
+            out["vault_built"] = True
+        except Exception as e:
+            out["vault_error"] = str(e)[:200]
+        return out
+
+    def _pull(tag):
+        r = _git(root, "pull", "--rebase", "--autostash", remote, branch, timeout=90)
+        ok = r.returncode == 0
+        if not ok:
+            # never leave a half-done rebase behind
+            if (root / ".git" / "rebase-merge").exists() or (root / ".git" / "rebase-apply").exists():
+                _git(root, "rebase", "--abort")
+            log.append(f"{tag}_fail:{(r.stderr or r.stdout or '').strip()[:160]}")
+        else:
+            log.append(f"{tag}_ok")
+        return ok
+
+    def _rebuild():
+        pe.maybe_rebuild_vault_state()
         out["vault_built"] = True
+
+    def _stage_and_commit(kind: str) -> Optional[str]:
+        idx_clean_before = out.get("_index_clean_before", True)
+        paths = ["vault"] + (["index.html"] if idx_clean_before else [])
+        _git(root, "add", "-A", "--", *paths)
+        staged = [p for p in (_git(root, "diff", "--cached", "--name-only").stdout or "").splitlines() if p.strip()]
+        bad = [p for p in staged if not _allowed_path(p)]
+        if bad:
+            # Something else was staged (not by us). Unstage only our paths and refuse.
+            _git(root, "reset", "-q", "--", *paths)
+            log.append(f"refuse_commit:foreign_staged:{bad[:5]}")
+            return None
+        if not staged:
+            return None
+        msg = VAULT_COMMIT_MSG + (" (heartbeat)" if kind == "heartbeat" else "")
+        r = _git(root, "commit", "-q", "-m", msg, "--", *staged)
+        if r.returncode != 0:
+            _git(root, "reset", "-q", "--", *staged)
+            log.append(f"commit_fail:{(r.stderr or r.stdout or '').strip()[:160]}")
+            return None
+        sha = (_git(root, "rev-parse", "HEAD").stdout or "").strip()
+        out["committed"] = True
+        out["commit"] = sha[:12]
+        out["commit_kind"] = kind
+        return sha
+
+    def _undo_own_commit(sha: str):
+        head = (_git(root, "rev-parse", "HEAD").stdout or "").strip()
+        if head == sha:
+            _git(root, "reset", "-q", "--soft", "HEAD~1")
+            _restore_derived(root, ["vault", "index.html"] if out.get("_index_clean_before", True) else ["vault"])
+            log.append("undo_own_commit")
+
+    try:
+        with pe.repo_sync_lock(label="alpaca_rth_tick vault-sync", timeout_sec=90):
+            # 1) leftover derived artifacts from an older flow block the pull; they are rebuilt below
+            leftovers = _restore_derived(root, ["vault"])
+            if leftovers:
+                log.append(f"restored_leftover:{len(leftovers)}")
+            out["_index_clean_before"] = not _porcelain(root, "index.html")
+            # 2) pull first
+            out["pulled"] = _pull("pull")
+            # 3) rebuild on top of whatever we have now
+            _rebuild()
+            dirty = [p for _, p in _porcelain(root, "vault", "index.html") if _allowed_path(p)]
+            if not out["_index_clean_before"]:
+                dirty = [p for p in dirty if p != "index.html"]
+            if not dirty:
+                log.append("no_change")
+            else:
+                # 4) meaningful vs timestamp-only
+                only_state = set(dirty) <= {"vault/state.enc.json", "vault/manifest.json"}
+                meaningful = bool(changed) or not only_state
+                if not meaningful:
+                    fp_new, fp_head = fingerprint(root, None), fingerprint(root, "HEAD")
+                    meaningful = (fp_new is None or fp_head is None or fp_new != fp_head)
+                    out["fp_equal"] = (fp_new is not None and fp_new == fp_head)
+                last = _last_vault_commit_epoch(root)
+                now_e = now_epoch if now_epoch is not None else _t.time()
+                since = (now_e - last) if last is not None else None
+                if changed or not only_state:
+                    kind = "change"            # tick acted, or new snapshots: commit now
+                elif meaningful:
+                    kind = "change" if (since is None or since >= VAULT_SEMANTIC_MIN_SEC) else None
+                    if kind is None:
+                        log.append("semantic_change_deferred")
+                else:
+                    kind = "heartbeat" if (since is None or since >= heartbeat_sec) else None
+                if kind is None:
+                    _restore_derived(root, ["vault"])
+                    log.append("timestamp_only:restored_head")
+                else:
+                    sha = _stage_and_commit(kind)
+                    if sha:
+                        r = _git(root, "push", remote, f"HEAD:{branch}", timeout=90)
+                        if r.returncode == 0:
+                            out["pushed"] = True
+                            log.append(f"push_ok:{kind}")
+                        else:
+                            log.append(f"push_fail_1:{(r.stderr or '').strip()[:160]}")
+                            # retry once: pull --rebase; on conflict, rebuild on top of the remote
+                            if _pull("retry_pull"):
+                                head_subj = (_git(root, "log", "-1", "--format=%s").stdout or "").strip()
+                                sha = (_git(root, "rev-parse", "HEAD").stdout or "").strip() if head_subj.startswith(VAULT_COMMIT_MSG) else None
+                                if not sha:
+                                    log.append("retry_pull:own_commit_missing")
+                            else:
+                                _undo_own_commit(sha)
+                                sha = None
+                                if _pull("retry_pull_clean"):
+                                    _rebuild()
+                                    sha = _stage_and_commit(kind)
+                                    if not sha:
+                                        _restore_derived(root, ["vault"])
+                            if sha:
+                                r2 = _git(root, "push", remote, f"HEAD:{branch}", timeout=90)
+                                if r2.returncode == 0:
+                                    out["pushed"] = True
+                                    log.append(f"push_ok_retry:{kind}")
+                                else:
+                                    log.append(f"push_gave_up:{(r2.stderr or '').strip()[:160]}")
+                                    _undo_own_commit(sha)
+                    else:
+                        _restore_derived(root, ["vault"])
+            # also publish an earlier local commit that never got pushed (ahead of remote)
+            ahead = (_git(root, "rev-list", "--count", f"{remote}/{branch}..HEAD").stdout or "0").strip()
+            if ahead.isdigit() and int(ahead) > 0 and not out["pushed"]:
+                # only if every ahead commit touches allowed paths
+                files = (_git(root, "diff", "--name-only", f"{remote}/{branch}..HEAD").stdout or "").split()
+                if files and all(_allowed_path(f) for f in files):
+                    r = _git(root, "push", remote, f"HEAD:{branch}", timeout=90)
+                    out["pushed"] = r.returncode == 0
+                    log.append("push_ahead_ok" if r.returncode == 0 else "push_ahead_fail")
+                else:
+                    log.append(f"ahead_{ahead}_not_vault_only:left_alone")
     except Exception as e:
         out["vault_error"] = str(e)[:200]
-    if push and changed:
-        try:
-          with pe.repo_sync_lock(label="alpaca_rth_tick push", timeout_sec=90):
-              subprocess.run(["git", "add", "-f", "--", "vault/state.enc.json", "vault/manifest.json"], cwd=str(ROOT), check=False)
-              # only commit if staged diff
-              st = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=str(ROOT), capture_output=True, text=True)
-              if "vault/state.enc.json" in (st.stdout or "") or "vault/manifest.json" in (st.stdout or ""):
-                  subprocess.run(
-                      ["git", "commit", "-m", "vault: refresh state after Alpaca RTH tick"],
-                      cwd=str(ROOT), check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                  )
-                  subprocess.run(["git", "push", "origin", "main"], cwd=str(ROOT), check=False,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                  out["pushed"] = True
-        except Exception as e:
-            out["push_error"] = str(e)[:200]
+    out.pop("_index_clean_before", None)
+    out["tree_clean"] = not [p for _, p in _porcelain(root, "vault", "index.html")]
+    out["log"] = [" ".join(str(x).split()) for x in out["log"]]
+    if out["log"]:
+        print("[alpaca_rth vault-sync] " + " | ".join(out["log"]), file=sys.stderr)
     return out
+
+
+def push_vault_if_changed(pe, changed: bool, push: bool) -> Dict[str, Any]:
+    """Back-compat entry point used by alpaca_rth_tick."""
+    return vault_sync_after_tick(pe, changed, push)
 
 
 def ensure_watcher(now: Optional[datetime] = None) -> Dict[str, Any]:
