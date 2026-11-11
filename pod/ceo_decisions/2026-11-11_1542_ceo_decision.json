@@ -1,0 +1,97 @@
+{
+  "prompt_set_id": "CEO-Q-2026-11-11-POSTCLOSE",
+  "status": "submitted",
+  "submitted_ct": "2026-11-11T15:42:00-0600",
+  "saved_ct": "2026-11-11T15:45:35-0600",
+  "session_target": "2026-11-12",
+  "briefing_ref": "pod/cio_briefings/2026-11-11_1530-ct-post-close_cio_briefing.md",
+  "responses": {
+    "approved_scenarios": [
+      "scenario_j",
+      "scenario_k",
+      "scenario_l"
+    ],
+    "fix_equity_reference": null,
+    "drip_pause": null,
+    "student_debt_payoff_target": null
+  },
+  "risk_pct": 0.25,
+  "max_total_open_risk_pct": 1.5,
+  "ceo_note": "Approve J, K and L.",
+  "last_ceo_note": "Sizer equity-reference fix, DRIP pause, and monthly student-debt payoff target still unanswered \u2014 leave open and carry forward.",
+  "source": "Grok Bot chat (CIO desk)",
+  "applied_ct": "2026-11-11T15:42:00-0600",
+  "applied_by": "cio_risk_gatekeeper",
+  "application": {
+    "tactical_risk_pct_per_shot": 0.25,
+    "tactical_risk_ceiling_pct_per_ticket": 0.5,
+    "max_total_open_risk_pct": 1.5,
+    "max_daily_realized_loss_pct_unchanged": 1.0,
+    "preapproved_setups": [
+      "ITT-2026-11-12-J",
+      "ITT-2026-11-12-K",
+      "ITT-2026-11-12-L"
+    ],
+    "staged_tickets": [
+      {
+        "setup_id": "ITT-2026-11-12-J",
+        "ticket_id": "TKT-7184B4E6",
+        "scenario": "J",
+        "instrument": "option_put",
+        "occ_symbol": "SPY261112P00760000",
+        "expiry": "2026-11-12",
+        "strike": 760.0,
+        "right": "put",
+        "quantity": 3,
+        "entry": 1.76,
+        "stop": 1.05,
+        "target1": 5.65,
+        "target2": 6.87,
+        "actual_dollar_risk": 213.0,
+        "status": "conditional_preapproved"
+      },
+      {
+        "setup_id": "ITT-2026-11-12-K",
+        "ticket_id": "TKT-796AF6BE",
+        "scenario": "K",
+        "instrument": "option_call",
+        "occ_symbol": "SPY261112C00763000",
+        "expiry": "2026-11-12",
+        "strike": 763.0,
+        "right": "call",
+        "quantity": 2,
+        "entry": 2.13,
+        "stop": 1.18,
+        "target1": 7.1,
+        "target2": 7.1,
+        "actual_dollar_risk": 190.0,
+        "status": "conditional_preapproved"
+      },
+      {
+        "setup_id": "ITT-2026-11-12-L",
+        "ticket_id": "TKT-EA9C3883",
+        "scenario": "L",
+        "instrument": "option_call",
+        "occ_symbol": "SPY261112C00755000",
+        "expiry": "2026-11-12",
+        "strike": 755.0,
+        "right": "call",
+        "quantity": 3,
+        "entry": 2.81,
+        "stop": 1.98,
+        "target1": 5.89,
+        "target2": 7.9,
+        "actual_dollar_risk": 249.0,
+        "status": "conditional_preapproved"
+      }
+    ],
+    "mutual_exclusion": "J, K, and L are mutually exclusive \u2014 first trigger wins; on fill of any one, cancel/disarm the other two. Max concurrent risk is the largest single ticket (~$249).",
+    "alpaca_status": "staged_conditional_not_submitted",
+    "alpaca_host_lock": "https://paper-api.alpaca.markets",
+    "open_followups": [
+      "fix_equity_reference",
+      "drip_pause",
+      "student_debt_payoff_target"
+    ]
+  }
+}

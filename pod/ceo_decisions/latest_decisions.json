@@ -1,9 +1,42 @@
 {
   "prompt_set_id": "CEO-Q-2026-11-11-POSTCLOSE",
-  "status": "pending_ceo_input",
-  "submitted_ct": null,
-  "responses": {},
-  "ceo_note": "",
+  "status": "submitted",
+  "submitted_ct": "2026-11-11T15:42:00-0600",
+  "saved_ct": "2026-11-11T15:45:35-0600",
   "session_target": "2026-11-12",
-  "briefing_ref": "pod/cio_briefings/2026-11-11_1530-ct-post-close_cio_briefing.md"
+  "briefing_ref": "pod/cio_briefings/2026-11-11_1530-ct-post-close_cio_briefing.md",
+  "responses": {
+    "approved_scenarios": [
+      "scenario_j",
+      "scenario_k",
+      "scenario_l"
+    ],
+    "fix_equity_reference": null,
+    "drip_pause": null,
+    "student_debt_payoff_target": null
+  },
+  "risk_pct": 0.25,
+  "max_total_open_risk_pct": 1.5,
+  "ceo_note": "Approve J, K and L.",
+  "last_ceo_note": "Sizer equity-reference fix, DRIP pause, and monthly student-debt payoff target still unanswered \u2014 leave open and carry forward.",
+  "source": "Grok Bot chat (CIO desk)",
+  "applied_ct": "2026-11-11T15:42:00-0600",
+  "applied_by": "cio_risk_gatekeeper",
+  "application": {
+    "tactical_risk_pct_per_shot": 0.25,
+    "tactical_risk_ceiling_pct_per_ticket": 0.5,
+    "max_total_open_risk_pct": 1.5,
+    "max_daily_realized_loss_pct_unchanged": 1.0,
+    "preapproved_setups": [
+      "ITT-2026-11-12-J",
+      "ITT-2026-11-12-K",
+      "ITT-2026-11-12-L"
+    ],
+    "mutual_exclusion": "J, K, and L are mutually exclusive \u2014 first trigger wins; on fill of any one, cancel/disarm the other two. Max concurrent risk is the largest single ticket (~$249).",
+    "open_followups": [
+      "fix_equity_reference",
+      "drip_pause",
+      "student_debt_payoff_target"
+    ]
+  }
 }
