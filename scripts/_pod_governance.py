@@ -719,12 +719,36 @@ def active_blotter_tickets() -> List[dict]:
     return out
 
 
+EQUITY_REF_FLAG = "equity_reference_use_paper_account"
+
+
+def equity_reference_value(limits: Optional[dict] = None, paper: Optional[dict] = None) -> float:
+    """Equity base that risk percentages are divided by.
+
+    Flag OFF (default; flag missing or anything but JSON true) reproduces the original
+    expression exactly: float(limits["equity_reference"] or 50000.0), currently $50k.
+
+    The "double-count": the pod trades the $100k Alpaca paper account but measures risk
+    against a $50k reference, so every risk % (per-ticket, open+staged, theme, daily/weekly
+    loss) reads 2x what it is against the paper account, and portfolio gates trip at half
+    the intended dollars (e.g. Tue Scenario E blocked at 0.375% real exposure).
+
+    Flag ON (limits.json "equity_reference_use_paper_account": true) uses the paper account
+    equity instead: paper_account_state.equity, else limits.alpaca_paper_equity, else 100000.
+    Limit percentages themselves are unchanged. The CEO has not decided, so it stays OFF."""
+    limits = limits if limits is not None else (rj(LIMITS, {}) or {})
+    if limits.get(EQUITY_REF_FLAG) is True:
+        paper = paper if paper is not None else (rj(PAPER_STATE, {}) or {})
+        return float(paper.get("equity") or limits.get("alpaca_paper_equity") or 100000.0)
+    return float(limits.get("equity_reference") or 50000.0)
+
+
 def compute_portfolio_snapshot() -> dict:
     m = market_snapshot()
     spy = m["spy"]
     limits = rj(LIMITS, {}) or {}
     paper = rj(PAPER_STATE, {}) or {}
-    eq_base = float(limits.get("equity_reference") or 50000.0)
+    eq_base = equity_reference_value(limits, paper)
     eq_paper = float(paper.get("equity") or limits.get("alpaca_paper_equity") or 100000.0)
     tickets = active_blotter_tickets()
     open_pos = paper.get("positions") or []
@@ -1001,7 +1025,7 @@ def check_limits() -> dict:
     lim = limits.setdefault("limits", {})
     usage = limits.setdefault("current_usage", {})
     snap = rj(PORTFOLIO) or compute_portfolio_snapshot()
-    eq = float(limits.get("equity_reference") or 50000.0)
+    eq = equity_reference_value(limits)
 
     now = now_ct()
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1142,7 +1166,7 @@ def apply_portfolio_gate_to_ticket(ticket: dict, auto_reduce: bool = True, stric
 
     limits = rj(LIMITS, {}) or {}
     lim = limits.get("limits") or {}
-    eq = float(limits.get("equity_reference") or 50000.0)
+    eq = equity_reference_value(limits)
     max_open = float(lim.get("max_total_open_risk_pct") or 1.0)
     max_theme = float(lim.get("max_theme_concentration_pct") or 0.75)
     max_ticket = float(lim.get("max_risk_per_ticket_pct") or 0.5)

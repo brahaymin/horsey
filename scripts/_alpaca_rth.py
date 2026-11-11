@@ -417,6 +417,16 @@ def _parse_time_stop(ts: str) -> dict:
     return out
 
 
+def _option_right(ticket: dict) -> Optional[str]:
+    rt = str(ticket.get("right") or ticket.get("option_type") or "").lower()
+    if rt in ("put", "p", "call", "c"):
+        return "put" if rt.startswith("p") else "call"
+    instr = str(ticket.get("instrument") or "").lower()
+    if instr in ("option_put", "option_call"):
+        return "put" if instr.endswith("put") else "call"
+    return None
+
+
 def parse_ticket_rules(ticket: dict) -> Dict[str, Any]:
     """Normalise one blotter ticket into deterministic rules.
 
@@ -469,6 +479,20 @@ def parse_ticket_rules(ticket: dict) -> Dict[str, Any]:
         r.update({"ok": True, "mode": "generic"})
         return r
 
+    is_option = str(ticket.get("instrument") or "").lower().startswith("option")
+    if is_option:
+        # Option tickets are long premium; the UNDERLYING view comes from the right
+        # (call = long SPY, put = short SPY). Entries are capped at 14:30 CT.
+        right = _option_right(ticket)
+        if direction not in ("", "long"):
+            r["warnings"].append(f"{tid}: option direction '{direction}' not supported (long premium only)")
+            return r
+        if right is None:
+            r["warnings"].append(f"{tid}: option right unknown (instrument option_put/option_call or right)")
+            return r
+        direction = "short" if right == "put" else "long"
+        r.update({"direction": direction, "is_option": True, "right": right,
+                  "entry_end": min(tuple(r["entry_end"]), ENTRY_WINDOW_END)})
     if direction not in ("long", "short"):
         r["warnings"].append(f"{tid}: direction '{direction}' not long/short")
         return r
@@ -524,7 +548,8 @@ def parse_ticket_rules(ticket: dict) -> Dict[str, Any]:
     if m:
         r["fill_guard"] = {"side": m.group(1).lower(), "level": float(m.group(2))}
 
-    inv = _parse_hard_inv(str(ticket.get("hard_invalidation_underlying") or ""), direction, entry_f,
+    inv_ref = (r.get("level") if r["mode"] == "acceptance" else r.get("confirm_level")) if r.get("is_option") else entry_f
+    inv = _parse_hard_inv(str(ticket.get("hard_invalidation_underlying") or ""), direction, inv_ref,
                           anchor if r["mode"] == "wall_fade" else None)
     if inv is None:
         r["warnings"].append(f"{tid}: hard_invalidation_underlying not parsed; broker stop only")
@@ -705,40 +730,38 @@ def in_trade_invalidation(rules: dict, or_info: dict, bars_5m: List[dict]) -> Tu
 
 
 def resolve_occ(pe, ticket: dict) -> Tuple[str, float, float]:
-    """Return (occ_symbol, strike, limit_price) capped by risk budget."""
-    payload = ticket.get("alpaca_paper_payload") or {}
-    order = payload.get("order") or {}
-    occ = order.get("symbol") or ticket.get("occ_symbol") or payload.get("occ_symbol")
-    strike = None
-    if occ and len(occ) >= 15:
-        # SPY261106P00733000
+    """Return (occ_symbol, strike, limit_price) from EXPLICIT ticket fields (fail closed).
+
+    Nov 11 2026: no default strike (prior_rth_low/732), expiry, premium or qty.
+    The limit is the ticket's entry premium, which is also what the order builder sends."""
+    spec, err = pe.option_contract_spec(ticket)
+    if err:
+        raise RuntimeError(f"option contract unresolved: {err}")
+    if ticket.get("entry") is None:
+        raise RuntimeError("option ticket missing entry premium")
+    return spec["occ_symbol"], float(spec["strike"]), float(ticket["entry"])
+
+
+def option_ticket_problem(pe, ticket: dict) -> Optional[str]:
+    """None if an option ticket can be routed; otherwise why it must stay pending."""
+    if _is_stock(ticket):
+        return None
+    try:
+        spec, err = pe.option_contract_spec(ticket)
+    except Exception as e:  # pragma: no cover
+        return f"contract check error: {e}"
+    if err:
+        return err
+    for f in ("entry", "stop", "target1"):
         try:
-            strike = int(occ[-8:]) / 1000.0
+            if ticket.get(f) is None or float(ticket.get(f)) <= 0:
+                return f"missing/invalid {f} premium"
         except Exception:
-            strike = None
-    if strike is None:
-        strike = round(float(prior_rth_low(ticket)))
-    exp = ticket.get("option_expiration") or ticket.get("session_target") or "2026-11-06"
-    opt_type = "put" if "put" in (ticket.get("instrument") or "option_put") else "call"
-    und = ticket.get("symbol") or "SPY"
-    if not occ:
-        info = pe.alpaca_find_option(und, exp, opt_type, strike, ticket.get("entry"))
-        occ = info.get("occ_symbol")
-    limit = float(ticket.get("entry") or order.get("limit_price") or 1.85)
-    # Cap limit so qty * limit * 100 <= dollar_risk_budget * soft factor? Risk is stop distance based.
-    # Cap premium so notional risk stays near budget: qty * (entry-stop) * 100 <= budget
-    qty = int(ticket.get("quantity") or 2)
-    stop = float(ticket.get("stop") or 1.25)
-    budget = float(ticket.get("dollar_risk_budget") or 125.0)
-    # If limit too rich vs stop distance, shrink limit toward stop+budget/(qty*100)
-    max_entry = stop + (budget / max(qty * 100, 1))
-    if limit > max_entry + 1e-9:
-        limit = round(max_entry, 2)
-    # Prefer range
-    rng = ticket.get("limit_entry_range") or []
-    if len(rng) == 2:
-        limit = min(max(limit, float(rng[0])), float(rng[1]))
-    return occ, float(strike), float(limit)
+            return f"missing/invalid {f} premium"
+    q = ticket.get("quantity")
+    if not isinstance(q, int) or isinstance(q, bool) or q < 1:
+        return "quantity (contracts) must be a positive int"
+    return None
 
 
 def _is_stock(ticket: dict) -> bool:
@@ -772,10 +795,7 @@ def submit_ticket(pe, ticket: dict, reason: str, or_info: dict, events_doc: dict
     if _is_stock(ticket):
         result = pe.alpaca_stage_ticket(tid, dry_run=False, submit_paper=True)
     else:
-        result = pe.alpaca_stage_ticket(
-            tid, dry_run=False, submit_paper=True,
-            expiration=ticket.get("session_target"), strike=strike, occ_symbol=occ,
-        )
+        result = pe.alpaca_stage_ticket(tid, dry_run=False, submit_paper=True, occ_symbol=occ)
     append_event(
         events_doc, "ORDER_SUBMITTED", tid,
         f"Alpaca Paper Order Submitted: {side_word} {qty}× {occ} @ ${limit:.2f} LMT",
@@ -834,6 +854,25 @@ def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dic
                 ticket = {**ticket, "status": "filled_paper", "alpaca_fill_price": entry_order.get("filled_avg_price"),
                           "alpaca_filled_ct": _iso_ct()}
                 notes.append(f"filled:{tid}")
+        elif (entry_order and entry_order.get("status") == "partially_filled"
+              and float(entry_order.get("filled_qty") or 0) > 0 and not ticket.get("alpaca_filled_ct")):
+            # Partial fill: start the time-stop clock at the first observed fill. Exits manage
+            # the filled qty, and the resting remainder is cancelled by the per-contract cancel.
+            ts_src = entry_order.get("filled_at") or entry_order.get("updated_at")
+            try:
+                first_ct = _iso_ct(parse_bar_ts(ts_src)) if ts_src else _iso_ct(now)
+            except Exception:
+                first_ct = _iso_ct(now)
+            append_event(
+                events_doc, "ORDER_PARTIAL_FILL", tid,
+                f"Alpaca Paper PARTIAL FILL: {entry_order.get('symbol')} {entry_order.get('filled_qty')} of {entry_order.get('qty')}",
+                f"avg {entry_order.get('filled_avg_price')} · order {entry_order.get('id')}",
+                severity="pos", symbol=entry_order.get("symbol") or "",
+            )
+            rewrite_blotter_ticket(tid, lambda t: {**t, "alpaca_filled_ct": first_ct,
+                                                   "alpaca_partial_fill_qty": entry_order.get("filled_qty")})
+            ticket = {**ticket, "alpaca_filled_ct": first_ct, "alpaca_partial_fill_qty": entry_order.get("filled_qty")}
+            notes.append(f"partial_fill:{tid}")
 
         # Only tickets that are live in the pod are managed. Closed or invalidated rows never touch positions.
         if ticket.get("status") not in ACTIVE_STATUSES:
@@ -977,8 +1016,16 @@ def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dic
         # EOD flat (ticket time_stop 'flat ... by HH:MM', default 14:45 CT) on session day
         exp = (ticket.get("session_target") or ticket.get("option_expiration") or "")
         today = now.strftime("%Y-%m-%d")
-        eod = (rules or {}).get("eod_flat") or EOD_FLAT
-        if exp == today and _hm(now) >= tuple(eod):
+        eod = tuple((rules or {}).get("eod_flat") or EOD_FLAT)
+        if not stock:
+            try:
+                spec, _err = pe.option_contract_spec(ticket)
+            except Exception:
+                spec = None
+            if spec and spec.get("expiry") == today:  # 0DTE: flat by 14:45 CT at the latest
+                exp = today
+                eod = min(eod, EOD_FLAT)
+        if exp == today and _hm(now) >= eod:
             _close("EOD_0DTE_FLAT", f"EOD FLAT: {occ}", f"{eod[0]:02d}:{eod[1]:02d} CT flat rule")
             continue
 
@@ -1440,6 +1487,14 @@ def alpaca_rth_tick(pe, force_sim: bool = False, push_if_changed: bool = False,
             continue
         if rules.get("warnings"):
             result.setdefault("warnings", []).extend(rules["warnings"])
+        opt_problem = option_ticket_problem(pe, ticket)
+        if opt_problem:
+            # Option contract not fully specified: keep pending, never submit or default.
+            warn = f"{tid}: option ticket left pending: {opt_problem}"
+            result.setdefault("warnings", []).append(warn)
+            result["actions"].append(f"pending_invalid_option:{tid}")
+            print(f"[alpaca_rth] WARNING {warn}", file=sys.stderr)
+            continue
 
         inv, inv_why = pre_trigger_invalidated(or_info, bars, now, rules)
         if inv:

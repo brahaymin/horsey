@@ -612,6 +612,72 @@ def occ_option_symbol(underlying, expiration, opt_type, strike):
     return f"{u}{yymmdd}{cp}{strike_i:08d}"
 
 
+_OCC_RE = __import__("re").compile(r"^([A-Z]{1,6})(\d{2})(\d{2})(\d{2})([CP])(\d{8})$")
+
+
+def parse_occ_symbol(occ):
+    """'SPY261112C00750000' -> {underlying, expiry 'YYYY-MM-DD', right, strike} or None."""
+    m = _OCC_RE.match(str(occ or "").strip().upper())
+    if not m:
+        return None
+    u, yy, mm, dd, cp, k = m.groups()
+    return {"underlying": u, "expiry": f"20{yy}-{mm}-{dd}", "right": "put" if cp == "P" else "call",
+            "strike": int(k) / 1000.0, "occ_symbol": m.group(0)}
+
+
+def option_right(ticket):
+    r = str(ticket.get("right") or ticket.get("option_type") or "").lower()
+    if r in ("put", "p", "call", "c"):
+        return "put" if r.startswith("p") else "call"
+    instr = str(ticket.get("instrument") or "").lower()
+    if instr in ("option_put", "option_call"):
+        return "put" if instr.endswith("put") else "call"
+    return None
+
+
+def option_contract_spec(ticket, occ_symbol=None, expiration=None, strike=None):
+    """Resolve an option ticket's contract from EXPLICIT fields only (fail closed).
+
+    Accepted: ticket occ_symbol (or explicit occ_symbol arg), or expiry
+    (option_expiration | expiry, or explicit arg) + strike (ticket strike, or explicit arg).
+    Any given fields must agree with each other. session_target is NOT an expiry, and
+    alpaca_paper_payload symbols from older dry-runs are ignored. Returns (spec, None)
+    or (None, error)."""
+    und = (ticket.get("symbol") or "SPY").upper()
+    right = option_right(ticket)
+    occ = occ_symbol or ticket.get("occ_symbol")
+    exp = expiration or ticket.get("option_expiration") or ticket.get("expiry")
+    k = strike if strike is not None else ticket.get("strike")
+    if exp is not None:
+        exp = str(exp)
+        if not __import__("re").match(r"^\d{4}-\d{2}-\d{2}$", exp):
+            return None, f"bad expiry {exp!r} (want YYYY-MM-DD)"
+    try:
+        k = float(k) if k is not None else None
+    except Exception:
+        return None, f"bad strike {k!r}"
+    if occ:
+        po = parse_occ_symbol(occ)
+        if not po:
+            return None, f"bad OCC symbol {occ!r}"
+        if po["underlying"] != und:
+            return None, f"OCC underlying {po['underlying']} != ticket symbol {und}"
+        if right and po["right"] != right:
+            return None, f"OCC right {po['right']} != ticket right {right}"
+        if exp and po["expiry"] != exp:
+            return None, f"OCC expiry {po['expiry']} != ticket expiry {exp}"
+        if k is not None and abs(po["strike"] - k) > 1e-6:
+            return None, f"OCC strike {po['strike']} != ticket strike {k}"
+        return po, None
+    if not right:
+        return None, "missing option right (instrument option_put/option_call or right)"
+    missing = [n for n, v in (("occ_symbol or expiry", exp), ("strike", k)) if v is None]
+    if missing:
+        return None, "missing " + " and ".join(missing)
+    sym = occ_option_symbol(und, exp, right, k)
+    return parse_occ_symbol(sym), None
+
+
 def _awaiting_keys_state():
     return {
         "schema_version": 1,
@@ -797,22 +863,14 @@ def build_alpaca_paper_order(ticket, occ_symbol=None, expiration=None, strike=No
     side = "buy" if (ticket.get("direction") or "long") == "long" else "sell"
 
     if instr.startswith("option"):
-        # Resolve OCC
-        und = ticket.get("symbol") or "SPY"
-        exp = expiration or ticket.get("option_expiration") or ticket.get("session_target")
-        if exp and len(str(exp)) == 10 and str(exp)[4] == "-":
-            pass
-        elif ticket.get("session_target"):
-            exp = ticket["session_target"]
-        else:
-            exp = "2026-11-06"
-        opt_type = "put" if "put" in instr else "call"
-        # Default strike: underlying trigger prior low or round entry-context; ticket uses premium so strike from trigger
-        if strike is None:
-            strike = (ticket.get("underlying_trigger") or {}).get("prior_rth_low") or 732
-            # Prefer round strike near 732 for SPY puts
-            strike = round(float(strike))
-        occ = occ_symbol or ticket.get("occ_symbol") or occ_option_symbol(und, exp, opt_type, strike)
+        # Fail closed (Nov 11 2026): the contract must come from explicit ticket fields
+        # (occ_symbol, or option_expiration/expiry + strike). Never a default strike/expiry.
+        spec, err = option_contract_spec(ticket, occ_symbol=occ_symbol, expiration=expiration, strike=strike)
+        if err:
+            raise RuntimeError(f"Option contract unresolved (fail closed): {err}")
+        if entry is None or stop is None:
+            raise RuntimeError("Option ticket missing entry/stop premium (fail closed)")
+        occ = spec["occ_symbol"]
         # Alpaca options: simple limit (brackets not universally supported on options)
         order = {
             "symbol": occ,
