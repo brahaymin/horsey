@@ -1,0 +1,36 @@
+{
+  "prompt_set_id": "CEO-Q-2026-11-10-POSTCLOSE",
+  "status": "submitted",
+  "submitted_ct": "2026-11-11T08:49:00-0600",
+  "saved_ct": "2026-11-11T15:30:00-0600",
+  "session_target": "2026-11-11",
+  "briefing_ref": "pod/cio_briefings/2026-11-10_1530-ct-post-close_cio_briefing.md",
+  "responses": {
+    "approved_scenarios": [
+      "veto_all"
+    ],
+    "fix_equity_reference": null,
+    "drip_pause": null,
+    "student_debt_payoff_target": null
+  },
+  "risk_pct": 0.25,
+  "max_total_open_risk_pct": 1.5,
+  "ceo_note": "Veto G, H, and I. Pre-market gap to about $757 made them stale. Stand aside today.",
+  "last_ceo_note": "Sizer equity-reference fix, DRIP pause, and monthly student-debt payoff target still unanswered \u2014 leave open and carry forward.",
+  "source": "Grok Bot chat (CIO desk)",
+  "applied_ct": "2026-11-11T08:49:00-0600",
+  "applied_by": "cio_risk_gatekeeper",
+  "application": {
+    "tactical_risk_pct_per_shot": 0.25,
+    "tactical_risk_ceiling_pct_per_ticket": 0.5,
+    "max_total_open_risk_pct": 1.5,
+    "max_daily_realized_loss_pct_unchanged": 1.0,
+    "preapproved_setups": [],
+    "veto": "Scenarios G, H, and I vetoed. No tickets staged. Paper desk stood aside for the Wednesday session.",
+    "open_followups": [
+      "fix_equity_reference",
+      "drip_pause",
+      "student_debt_payoff_target"
+    ]
+  }
+}

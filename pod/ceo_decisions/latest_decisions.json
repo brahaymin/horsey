@@ -1,9 +1,9 @@
 {
-  "prompt_set_id": "CEO-Q-2026-11-10-POSTCLOSE",
+  "prompt_set_id": "CEO-Q-2026-11-11-POSTCLOSE",
   "status": "pending_ceo_input",
   "submitted_ct": null,
   "responses": {},
   "ceo_note": "",
-  "session_target": "2026-11-11",
-  "briefing_ref": "pod/cio_briefings/2026-11-10_1530-ct-post-close_cio_briefing.md"
+  "session_target": "2026-11-12",
+  "briefing_ref": "pod/cio_briefings/2026-11-11_1530-ct-post-close_cio_briefing.md"
 }
