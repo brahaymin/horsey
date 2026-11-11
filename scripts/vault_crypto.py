@@ -240,11 +240,86 @@ def sync_encrypted_snapshots(password: str, meta: dict) -> dict:
     return {"created": created, "updated": updated, "skipped": skipped, "total_encrypted": total}
 
 
+
+# ---------------------------------------------------------------- memo publication guard (Nov 11 2026)
+# Income Sleeve memos publish ONLY when the CEO lists the filename in the local (gitignored)
+# approval file pod/income_sleeve/approved_memos.json  -> {"approved": ["<file>.md", ...]}
+# Missing / unreadable / malformed file => nothing in pod/income_sleeve is approved (fail closed).
+# Every publish path (vault build/build-state, pod_engine build-memos-index / index-memos, the
+# hourly sync and the RTH tick flow, which shell out to those) goes through memo_publishable().
+MEMO_APPROVAL_REL = "pod/income_sleeve/approved_memos.json"
+GUARDED_MEMO_PREFIXES = ("pod/income_sleeve/",)
+GUARDED_ALWAYS_PUBLISH = frozenset({"pod/income_sleeve/holdings_snapshot.json"})
+
+
+def load_approved_memos(root=None) -> frozenset:
+    """Approved income-sleeve memo filenames. Any problem => empty set (fail closed)."""
+    try:
+        base = Path(root) if root is not None else ROOT
+        raw = json.loads((base / MEMO_APPROVAL_REL).read_text(encoding="utf-8"))
+        items = raw.get("approved") if isinstance(raw, dict) else raw
+        if not isinstance(items, list):
+            return frozenset()
+        return frozenset(os.path.basename(str(x).strip()) for x in items
+                         if isinstance(x, str) and x.strip().endswith(".md"))
+    except Exception:
+        return frozenset()
+
+
+def memo_publishable(rel, root=None, approved=None) -> bool:
+    """True unless `rel` is under a guarded memo dir and not explicitly approved."""
+    r = str(rel or "").replace(os.sep, "/").lstrip("./")
+    if not r.startswith(GUARDED_MEMO_PREFIXES):
+        return True
+    if r in GUARDED_ALWAYS_PUBLISH:
+        return True
+    rest = r.split("/", 2)[-1]
+    if "/" in rest or not rest.endswith(".md"):
+        return False  # subdirs, the approval file itself, unknown file types: never publish
+    ok = approved if approved is not None else load_approved_memos(root)
+    return rest in ok
+
+
+def filter_memos_index(idx, root=None, approved=None):
+    """Return a copy of a memos_index dict with unapproved memos removed everywhere."""
+    if not isinstance(idx, dict):
+        return idx
+    ok = approved if approved is not None else load_approved_memos(root)
+    memos = [m for m in (idx.get("memos") or []) if not isinstance(m, dict) or memo_publishable(m.get("path"), approved=ok)]
+    keep_ids = {m.get("id") for m in memos if isinstance(m, dict)}
+    dropped = {m.get("id") for m in (idx.get("memos") or []) if isinstance(m, dict)} - keep_ids
+    out = dict(idx)
+    out["memos"] = memos
+    if "count" in out:
+        out["count"] = len(memos)
+    if isinstance(idx.get("by_role"), dict):
+        out["by_role"] = {k: [i for i in (v or []) if i not in dropped] for k, v in idx["by_role"].items()}
+    if isinstance(idx.get("roles"), list) and isinstance(out.get("by_role"), dict):
+        out["roles"] = [dict(r, count=len(out["by_role"].get(r.get("role"), []))) if isinstance(r, dict) and "count" in r else r
+                        for r in idx["roles"]]
+    if isinstance(idx.get("by_run"), list):
+        runs = []
+        for run in idx["by_run"]:
+            if not isinstance(run, dict):
+                runs.append(run); continue
+            mm = {k: v for k, v in (run.get("memos") or {}).items() if v not in dropped}
+            if mm:
+                runs.append(dict(run, memos=mm))
+        out["by_run"] = runs
+    lcb = out.get("latest_cio_briefing")
+    if lcb and not memo_publishable(lcb, approved=ok):
+        out["latest_cio_briefing"] = None
+    return out
+
+
 def collect_state_files() -> dict:
     """Build virtual file map for vault/state.enc.json."""
     files: dict = {}
+    approved = load_approved_memos()
 
     def add_text(rel: str, path: Path):
+        if not memo_publishable(rel, approved=approved):
+            return
         if not path.exists() or not path.is_file():
             return
         try:
@@ -253,6 +328,8 @@ def collect_state_files() -> dict:
             pass
 
     def add_json(rel: str, path: Path):
+        if not memo_publishable(rel, approved=approved):
+            return
         if not path.exists() or not path.is_file():
             return
         try:
@@ -333,11 +410,13 @@ def collect_state_files() -> dict:
     # All memos referenced by index + all cio/specialist md/json under pod/
     mi = files.get("pod/memos_index.json")
     if isinstance(mi, dict):
+        mi = filter_memos_index(mi, approved=approved)
+        files["pod/memos_index.json"] = mi
         for m in mi.get("memos") or []:
             path = m.get("path")
             if path and str(path).startswith("snapshots/"):
                 continue  # older snapshot reports load on demand from vault/snapshots/
-            if path:
+            if path and memo_publishable(path, approved=approved):
                 add_text(path, ROOT / path) if str(path).endswith(".md") else add_json(path, ROOT / path)
         # latest_cio_briefing
         lcb = mi.get("latest_cio_briefing")
@@ -351,13 +430,15 @@ def collect_state_files() -> dict:
             if p.suffix not in (".md", ".json", ".jsonl"):
                 continue
             rel = str(p.relative_to(ROOT)).replace(os.sep, "/")
-            if rel in files:
+            if rel in files or not memo_publishable(rel, approved=approved):
                 continue
             if p.suffix == ".json":
                 add_json(rel, p)
             else:
                 add_text(rel, p)
 
+    for k in [k for k in files if not memo_publishable(k, approved=approved)]:
+        files.pop(k, None)
     return files
 
 

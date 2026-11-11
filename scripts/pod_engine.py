@@ -415,12 +415,31 @@ def _memo_meta(rel, role, label, agent):
             "session_date": date, "run_id": run, "sort_key": f"{date}T{hh}{mm}", "path": rel, "bytes": os.path.getsize(full), "summary_line": summary}
 
 
+def _memo_guard():
+    """memo_publishable from vault_crypto (single source of truth). If it can't be loaded,
+    fail closed: nothing under pod/income_sleeve/ is publishable."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_vault_crypto_guard", os.path.join(os.path.dirname(os.path.abspath(__file__)), "vault_crypto.py"))
+        vc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(vc)
+        approved = vc.load_approved_memos(ROOT)
+        return lambda rel: vc.memo_publishable(rel, approved=approved)
+    except Exception as e:
+        print(f"memo guard unavailable, failing closed: {e}", file=sys.stderr)
+        return lambda rel: not str(rel or "").replace(os.sep, "/").startswith("pod/income_sleeve/")
+
+
 def build_memos_index():
     import glob
     items = []
+    publishable = _memo_guard()
     for d, suf, role, label, agent in MEMO_SOURCES:
         for f in glob.glob(P(d, "*" + suf)):
-            items.append(_memo_meta(os.path.relpath(f, ROOT).replace(os.sep, "/"), role, label, agent))
+            rel = os.path.relpath(f, ROOT).replace(os.sep, "/")
+            if not publishable(rel):
+                continue  # unapproved (e.g. Income Sleeve memo without CEO approval)
+            items.append(_memo_meta(rel, role, label, agent))
     for f in glob.glob(P("snapshots", "*", "*", "*", "*.md")):
         items.append(_memo_meta(os.path.relpath(f, ROOT).replace(os.sep, "/"), "gamma_data", "SPY Gamma Raw Data Report", "SPY Gamma Structure Monitor"))
     items.sort(key=lambda x: (x["sort_key"], -ROLE_ORDER.index(x["role"])), reverse=True)
