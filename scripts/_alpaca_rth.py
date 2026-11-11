@@ -44,6 +44,7 @@ def _gov_close(ticket_id, exit_price, kind, opened_ct=None, notes=None):
 
 DONE_STATUSES = {
     "submitted_paper", "filled_paper", "closed_paper", "invalidated_paper", "expired_paper",
+    "cancelled_paper",
 }
 ENTRY_WINDOW_START = (9, 0)   # CT after OR built
 ENTRY_WINDOW_END = (14, 30)
@@ -768,6 +769,54 @@ def _is_stock(ticket: dict) -> bool:
     return not str(ticket.get("instrument") or "stock").startswith("option")
 
 
+def _governance():
+    import importlib.util as _ilu
+    sp = _ilu.spec_from_file_location("_pod_governance_submit", str(ROOT / "scripts" / "_pod_governance.py"))
+    gm = _ilu.module_from_spec(sp)
+    sp.loader.exec_module(gm)
+    return gm
+
+
+def submit_risk_check(ticket: dict, gm=None) -> Tuple[bool, str]:
+    """Submit-time gate for every new entry (stock and option), Nov 11 2026 CIO tightening.
+    Blocks when the kill switch is breached, when this ticket alone exceeds
+    max_risk_per_ticket_pct, or when open risk (other submitted/filled tickets) plus this
+    ticket would exceed max_total_open_risk_pct. Limits and the equity reference are read
+    from governance unchanged (equity_reference flag left as configured, default OFF).
+    Any error => blocked (fail closed)."""
+    try:
+        gm = gm or _governance()
+        blocked, why = gm.kill_switch_blocks_new_entries()
+        if blocked:
+            lims = str(why).split(":", 1)[1].strip() if ":" in str(why) else ""
+            lims = lims.replace("_pct", "").replace("_", " ")
+            return False, "Kill switch breached; no new entries" + (f" ({lims})" if lims else "")
+        limits = gm.rj(gm.LIMITS, {}) or {}
+        lim = limits.get("limits") or {}
+        eq = float(gm.equity_reference_value(limits))
+        if eq <= 0:
+            return False, "Risk check unavailable (no equity reference); entry held"
+        max_ticket = float(lim.get("max_risk_per_ticket_pct") or 0.5)
+        max_open = float(lim.get("max_total_open_risk_pct") or 1.0)
+        tid = ticket.get("ticket_id")
+        this_risk = float(gm.ticket_dollar_risk(ticket))
+        if this_risk <= 0:
+            return False, "Risk check unavailable (ticket risk undefined); entry held"
+        other_open = sum(float(gm.ticket_dollar_risk(t)) for t in gm.active_blotter_tickets()
+                         if t.get("status") in ("submitted_paper", "filled_paper") and t.get("ticket_id") != tid)
+        this_pct = 100.0 * this_risk / eq
+        open_pct = 100.0 * (other_open + this_risk) / eq
+        if this_pct > max_ticket + 1e-9:
+            return False, f"Ticket risk {this_pct:.3f}% (${this_risk:,.0f}) is above the {max_ticket}% per-ticket limit"
+        if open_pct > max_open + 1e-9:
+            return False, (f"Open risk would reach {open_pct:.3f}% (${other_open + this_risk:,.0f}), "
+                           f"above the {max_open}% total open-risk limit")
+        return True, f"Risk check passed: ticket {this_pct:.3f}% · open risk after fill {open_pct:.3f}% of {max_open}%"
+    except Exception as e:
+        print(f"[alpaca_rth] risk check error: {e}", file=sys.stderr)
+        return False, "Risk check unavailable; entry held (fail closed)"
+
+
 def submit_ticket(pe, ticket: dict, reason: str, or_info: dict, events_doc: dict, force_sim: bool) -> Dict[str, Any]:
     tid = ticket["ticket_id"]
     qty = int(ticket.get("quantity") or 2)
@@ -781,6 +830,15 @@ def submit_ticket(pe, ticket: dict, reason: str, or_info: dict, events_doc: dict
     else:
         occ, strike, limit = resolve_occ(pe, ticket)
         side_word = "BUY"
+    ok, risk_why = submit_risk_check(ticket)
+    if not ok:
+        # Stays unsubmitted (status unchanged); reason logged once per distinct reason.
+        if not any(e.get("ticket_id") == tid and e.get("kind") == "SUBMIT_BLOCKED" and e.get("detail") == risk_why
+                   for e in events_doc.get("events") or []):
+            append_event(events_doc, "SUBMIT_BLOCKED", tid, f"Entry not submitted: {tid}", risk_why,
+                         severity="neg", symbol=occ)
+        print(f"[alpaca_rth] submit blocked {tid}: {risk_why}", file=sys.stderr)
+        return {"mode": "blocked", "submitted": False, "reason": risk_why, "occ": occ}
     if force_sim:
         # Never transmit under force-sim
         append_event(
@@ -808,6 +866,7 @@ def submit_ticket(pe, ticket: dict, reason: str, or_info: dict, events_doc: dict
 
 
 ACTIVE_STATUSES = {"submitted_paper", "filled_paper"}
+OPEN_ENTRY_STATES = {"new", "accepted", "pending_new", "accepted_for_bidding", "held", "pending_replace", "replaced"}
 
 
 def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dict], now: datetime, force_sim: bool) -> List[str]:
@@ -874,6 +933,29 @@ def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dic
             ticket = {**ticket, "alpaca_filled_ct": first_ct, "alpaca_partial_fill_qty": entry_order.get("filled_qty")}
             notes.append(f"partial_fill:{tid}")
 
+        # 14:30 CT: cancel an entry order that is still completely unfilled (that order only,
+        # by id; never cancel-all). Partially/fully filled entries and positions are left alone.
+        if (ticket.get("status") == "submitted_paper" and entry_order and _hm(now) >= ENTRY_WINDOW_END
+                and entry_order.get("status") in OPEN_ENTRY_STATES and float(entry_order.get("filled_qty") or 0) == 0
+                and entry_order.get("id")):
+            sym = entry_order.get("symbol") or ""
+            if force_sim:
+                append_event(events_doc, "ENTRY_CANCELLED", tid, f"[SIM] Unfilled entry would be cancelled: {sym}",
+                             "No fill by 14:30 CT (simulation, nothing sent)", "warn", sym)
+                notes.append(f"sim:ENTRY_CANCELLED:{tid}")
+                continue
+            try:
+                pe.alpaca_request("DELETE", pe.ALPACA_PAPER_HOST, f"/v2/orders/{entry_order['id']}")
+                append_event(events_doc, "ENTRY_CANCELLED", tid, f"Unfilled entry cancelled at 14:30 CT: {sym}",
+                             "No fill by 14:30 CT; this entry order was cancelled (no new risk after 14:30 CT)",
+                             "warn", sym, extra={"alpaca_order_id": entry_order.get("id")})
+                rewrite_blotter_ticket(tid, lambda t: {**t, "status": "cancelled_paper",
+                                                       "alpaca_cancel_reason": "unfilled_at_1430", "alpaca_cancelled_ct": _iso_ct()})
+                notes.append(f"ENTRY_CANCELLED:{tid}")
+            except Exception as e:
+                notes.append(f"cancel_fail:{tid}:{e}")
+            continue
+
         # Only tickets that are live in the pod are managed. Closed or invalidated rows never touch positions.
         if ticket.get("status") not in ACTIVE_STATUSES:
             continue
@@ -908,6 +990,24 @@ def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dic
             t1 = float(ticket.get("target1") or (ticket.get("oco_bracket") or {}).get("take_profit_1") or 3.65)
             t2 = float(ticket.get("target2") or (ticket.get("oco_bracket") or {}).get("take_profit_2") or 4.85)
         risk_unit = abs(entry - stop) if entry and stop else float(ticket.get("risk_per_unit") or 0.6)
+
+        # Breakeven: once the T1 scale-out has (partially) filled, the remaining contracts'
+        # stop moves to the entry premium. Persisted on the ticket so it survives order-list paging.
+        be_note = ""
+        if not stock and direction == "long":
+            be = ticket.get("alpaca_breakeven_stop")
+            t1_order = by_coid.get(f"horsey-t1-{tid}"[:48])
+            if be is None and t1_order and float(t1_order.get("filled_qty") or 0) > 0 and entry:
+                be = round(entry, 2)
+                append_event(events_doc, "STOP_TO_BREAKEVEN", tid,
+                             f"Stop moved to breakeven: {int(qty)}× {occ} @ ${be:.2f}",
+                             f"T1 filled {int(float(t1_order.get('filled_qty') or 0))} · remaining stop ${stop:.2f} → ${be:.2f} entry premium", "pos", occ)
+                rewrite_blotter_ticket(tid, lambda t, _be=be: {**t, "alpaca_breakeven_stop": _be, "alpaca_breakeven_ct": _iso_ct()})
+                ticket = {**ticket, "alpaca_breakeven_stop": be}
+                notes.append(f"BREAKEVEN:{tid}")
+            if be is not None and float(be) > stop:
+                stop = float(be)
+                be_note = " (breakeven stop)"
 
         # Underlying hard invalidation from the ticket's own hard_invalidation_underlying
         und_inv, und_why, inv_lvl = in_trade_invalidation(rules, or_info, bars_5m) if rules.get("ok") else (False, "", None)
@@ -956,8 +1056,8 @@ def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dic
         # Hard stop on mark (direction-aware) OR underlying invalidation
         stop_hit = bool(mark) and ((mark <= stop) if direction == "long" else (mark >= stop))
         if stop_hit or und_inv:
-            why = f"mark {mark} {'<=' if direction == 'long' else '>='} stop {stop}" if stop_hit else und_why
-            _close("STOP_EXIT", f"STOP EXIT: {verb} {int(qty)}× {occ}", why)
+            why = f"mark {mark} {'<=' if direction == 'long' else '>='} stop {stop}{be_note}" if stop_hit else und_why
+            _close("STOP_EXIT", f"{'BREAKEVEN STOP' if (stop_hit and be_note) else 'STOP EXIT'}: {verb} {int(qty)}× {occ}", why)
             continue
 
         # Targets. Stock tickets carry a native broker bracket (stop + take-profit at T1),
@@ -977,7 +1077,8 @@ def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dic
                         })
                         append_event(events_doc, "TARGET1_SCALED", tid,
                                      f"TARGET1 SCALED: sold {sell_qty}× {occ} @ ≥${t1}",
-                                     f"Remaining stop → breakeven entry {entry}", "pos", occ)
+                                     f"T1 limit order placed; remaining stop moves to breakeven (entry {entry}) once T1 fills",
+                                     "pos", occ)
                         notes.append(f"T1:{tid}")
                     except Exception as e:
                         notes.append(f"T1_fail:{e}")
