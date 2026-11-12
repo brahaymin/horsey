@@ -44,7 +44,7 @@ def _gov_close(ticket_id, exit_price, kind, opened_ct=None, notes=None):
 
 DONE_STATUSES = {
     "submitted_paper", "filled_paper", "closed_paper", "invalidated_paper", "expired_paper",
-    "cancelled_paper", "voided_paper",
+    "cancelled_paper", "voided_paper", "skipped_paper",
 }
 ENTRY_WINDOW_START = (9, 0)   # CT after OR built (legacy tickets; OR30 completes at 09:00)
 ENTRY_WINDOW_END = (14, 30)
@@ -492,6 +492,24 @@ def fed_speaker_blackout(now: datetime) -> Tuple[bool, str, Optional[str]]:
 
 def live_wall_check(spot: Optional[float], now: datetime, latest_doc: Optional[dict] = None,
                     cfg: Optional[dict] = None) -> Tuple[bool, str]:
+    r = wall_check(spot, now, latest_doc, cfg)
+    return r["ok"], r["why"]
+
+
+def wall_check(spot: Optional[float], now: datetime, latest_doc: Optional[dict] = None,
+               cfg: Optional[dict] = None) -> Dict[str, Any]:
+    """Same as live_wall_check, returning {"ok", "why", "code", "age_min"}; code is one of
+    ok | missing | no_timestamp | stale | no_spot | equal | mid_range."""
+    def _r(ok, why, code, age=None):
+        return {"ok": ok, "why": why, "code": code, "age_min": None if age is None else round(age, 1)}
+    try:
+        ok, why, code, age = _wall_check_core(spot, now, latest_doc, cfg)
+    except Exception as e:  # pragma: no cover
+        return _r(False, f"Wall check error ({str(e)[:80]}); entry held (fail closed)", "error")
+    return _r(ok, why, code, age)
+
+
+def _wall_check_core(spot, now, latest_doc, cfg):
     """Firewall check 5 at arm time with LIVE 0DTE walls from the monitor snapshot
     (latest.json summary call_wall_0dte / put_wall_0dte). Blocks mid-range no-man's-land
     (the middle 40% between the walls). Fails closed when the walls are missing, equal,
@@ -502,7 +520,7 @@ def live_wall_check(spot: Optional[float], now: datetime, latest_doc: Optional[d
     try:
         put, call = float(s.get("put_wall_0dte")), float(s.get("call_wall_0dte"))
     except Exception:
-        return False, "Live 0DTE walls unavailable; entry held (fail closed)"
+        return False, "Live 0DTE walls unavailable; entry held (fail closed)", "missing", None
     ts = s.get("timestamp_ct") or (j or {}).get("timestamp_ct")
     try:
         tsd = datetime.strptime(str(ts), "%Y-%m-%dT%H:%M:%S%z").astimezone(CT)
@@ -510,20 +528,22 @@ def live_wall_check(spot: Optional[float], now: datetime, latest_doc: Optional[d
         try:
             tsd = datetime.fromisoformat(str(ts)).astimezone(CT)
         except Exception:
-            return False, "Live 0DTE walls have no timestamp; entry held (fail closed)"
+            return False, "Live 0DTE walls have no timestamp; entry held (fail closed)", "no_timestamp", None
     age_min = (now - tsd).total_seconds() / 60.0
-    if tsd.date() != now.astimezone(CT).date() or age_min > float(cfg.get("live_walls_max_age_min") or 90) or age_min < -5:
-        return False, f"0DTE walls are stale (snapshot {tsd:%m-%d %H:%M} CT); entry held (fail closed)"
+    max_age = float(cfg.get("live_walls_max_age_min") or 90)
+    if tsd.date() != now.astimezone(CT).date() or age_min > max_age or age_min < -5:
+        return (False, f"0DTE walls are stale: snapshot {tsd:%m-%d %H:%M} CT is {age_min:.0f} min old "
+                       f"(limit {max_age:g} min, same session); entry held (fail closed)", "stale", age_min)
     if spot is None:
-        return False, "No completed-bar price for the wall check; entry held"
+        return False, "No completed-bar price for the wall check; entry held", "no_spot", age_min
     lo, hi = min(put, call), max(put, call)
     if hi - lo < 1e-9:
-        return False, f"0DTE walls coincide (put {put:g} / call {call:g}); wall check cannot run; entry held (fail closed)"
+        return False, f"0DTE walls coincide (put {put:g} / call {call:g}); wall check cannot run; entry held (fail closed)", "equal", age_min
     w = hi - lo
     if (lo + 0.3 * w) < spot < (hi - 0.3 * w):
         return False, (f"SPY {spot:.2f} is mid-range between the 0DTE walls {lo:g}–{hi:g} "
-                       f"(no-man's-land {lo + 0.3 * w:.2f}–{hi - 0.3 * w:.2f}); entry held")
-    return True, f"0DTE walls {lo:g}/{hi:g} at {tsd:%H:%M} CT; SPY {spot:.2f} not mid-range"
+                       f"(no-man's-land {lo + 0.3 * w:.2f}–{hi - 0.3 * w:.2f}); entry held"), "mid_range", age_min
+    return True, f"0DTE walls {lo:g}/{hi:g} at {tsd:%H:%M} CT; SPY {spot:.2f} not mid-range", "ok", age_min
 
 
 def option_live_quote(pe, occ: str) -> Tuple[Optional[dict], str]:
@@ -580,14 +600,19 @@ def reprice_option_ticket(ticket: dict, rules: dict, quote: Optional[dict], spot
     if not (s_entry > s_stop > 0):
         return None, "staged premiums invalid"
     entry = round(mid + 0.02, 2)
+    if rules and rules.get("is_option") and is_zero_dte(ticket, now):
+        # R24: 0.35-0.50 delta at the trigger (fail closed when the delta is missing)
+        dlt = quote.get("delta")
+        if dlt is None or not (R24_DELTA_MIN - 1e-9 <= abs(float(dlt)) <= R24_DELTA_MAX + 1e-9):
+            return None, f"contract delta {dlt} is outside the 0.35–0.50 band at the trigger"
     inv = (rules or {}).get("inv") or {}
+    und_stop = underlying_working_stop(ticket, rules, spot)
     delta, gamma = quote.get("delta"), quote.get("gamma")
     method = "staged_ratio"
     stop = None
-    if inv.get("level") is not None and spot is not None and delta is not None and gamma is not None:
-        d = abs(float(spot) - float(inv["level"]))
-        stop = mid - (abs(float(delta)) * d + 0.5 * abs(float(gamma)) * d * d) - 0.05
-        method = "greeks_R24"
+    if und_stop is not None and spot is not None and delta is not None and gamma is not None:
+        stop = r24_premium_stop(mid, delta, gamma, float(spot) - float(und_stop))
+        method = "greeks_R24_v1.3"
     if stop is None:
         stop = entry * (s_stop / s_entry)
     stop = round(stop, 2)
@@ -603,13 +628,148 @@ def reprice_option_ticket(ticket: dict, rules: dict, quote: Optional[dict], spot
     return {"entry": entry, "stop": stop, "target1": t1, "target2": t2, "quantity": qty,
             "reprice": {"ct": _iso_ct(now), "bid": bid, "ask": ask, "mid": round(mid, 4), "spread_pct": round(spr, 2),
                         "quote_age_sec": round(age, 1), "delta": delta, "gamma": gamma, "stop_method": method,
-                        "underlying_spot": spot, "underlying_inv": inv.get("level")}}, "ok"
+                        "underlying_spot": spot, "underlying_inv": inv.get("level"), "underlying_stop_used": und_stop}}, "ok"
 
 
 GEX45_CAP_DOLLARS = -5e9  # R22: 45D net GEX below -$5B caps size at 1/2
+R24_NO_NEW_0DTE_AFTER = (13, 30)
+R24_DELTA_MIN, R24_DELTA_MAX = 0.35, 0.50
+R24_TIME_STOP_MIN, R24_TIME_STOP_R = 30, 0.5
+R16_FADE_DISARM_RVOL = 1.2
+R16_REJECTION_BAR_MAX = 1.0
+_OCC_EXP = __import__("re").compile(r"^[A-Z]{1,6}(\d{2})(\d{2})(\d{2})[CP]\d{8}$")
 
 
-def net_gex_45d_conservative(latest_doc: Optional[dict] = None) -> Tuple[Optional[float], Dict[str, Any]]:
+def option_expiry(ticket: dict) -> Optional[str]:
+    """YYYY-MM-DD from the ticket's explicit expiry or OCC symbol (None if neither)."""
+    exp = ticket.get("option_expiration") or ticket.get("expiry")
+    if exp:
+        return str(exp)[:10]
+    m = _OCC_EXP.match(str(ticket.get("occ_symbol") or "").upper())
+    return f"20{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else None
+
+
+def is_zero_dte(ticket: dict, now: datetime) -> bool:
+    if _is_stock(ticket):
+        return False
+    return option_expiry(ticket) == now.astimezone(CT).strftime("%Y-%m-%d")
+
+
+def _num(v) -> Optional[float]:
+    try:
+        v = float(v)
+        return v if v == v and abs(v) != float("inf") else None
+    except Exception:
+        return None
+
+
+def r24_premium_stop_old(mid: float, delta: float, gamma: float, d: float) -> float:
+    """Pre-v1.3 (wider) form, kept only for comparison: mid - (|Δ|·d + ½|Γ|·d²) - 0.05."""
+    d = abs(float(d))
+    return mid - (abs(float(delta)) * d + 0.5 * abs(float(gamma)) * d * d) - 0.05
+
+
+def r24_premium_stop(mid: float, delta: float, gamma: float, d: float) -> float:
+    """R24 premium stop, v1.3 sign correction (11:28 CT, PTJ-agreed; framework R24 and the
+    Nov 13 card): mid - |Δ|·d + ½Γ·d² - $0.05, d = distance from the trigger price to the
+    underlying working stop (same form for calls and puts, |Δ|; d taken as a distance, so its
+    sign never matters). Per the CIO, the TIGHTER (higher) of the corrected and the old form is
+    used in every case, so the stop can never be wider than before."""
+    d = abs(float(d))
+    new = mid - abs(float(delta)) * d + 0.5 * abs(float(gamma)) * d * d - 0.05
+    return max(new, r24_premium_stop_old(mid, delta, gamma, d))
+
+
+def underlying_working_stop(ticket: dict, rules: Optional[dict], spot: Optional[float]) -> Optional[float]:
+    """Nearer (tighter) of the ticket's underlying working stop (underlying_stop) and its parsed
+    hard invalidation level. None if neither exists."""
+    cands = [x for x in (_num(ticket.get("underlying_stop")),
+                         _num(((rules or {}).get("inv") or {}).get("level"))) if x is not None]
+    if not cands:
+        return None
+    if spot is None:
+        return cands[0]
+    return min(cands, key=lambda x: abs(float(spot) - x))
+
+
+def underlying_target(ticket: dict) -> Optional[float]:
+    ut = ticket.get("underlying_trigger") if isinstance(ticket.get("underlying_trigger"), dict) else {}
+    for v in (ticket.get("underlying_target"), ut.get("underlying_target"), ut.get("t1_wall")):
+        if _num(v) is not None:
+            return _num(v)
+    return None
+
+
+def c4_check(ticket: dict, rules: dict, spot: Optional[float], now: datetime) -> Tuple[bool, str]:
+    """R19 + C4 at arm time for option tickets (premium R:R is what the sizer measured).
+    Passes if the underlying R (first real target vs working stop, from the trigger price) meets
+    the minimum (3:1 tactical, 5:1 PTJ macro), or, for 0DTE tactical tickets only, if premium R
+    meets 3:1 AND the underlying target is at least 1.0x the stop distance away. Also R24:
+    never a strike beyond the target. Missing target or stop => fail closed."""
+    if _is_stock(ticket):
+        return True, "stock ticket (underlying R measured by the sizer)"
+    tgt = underlying_target(ticket)
+    stp = underlying_working_stop(ticket, rules, spot)
+    if tgt is None or stp is None or spot is None:
+        return False, "C4/R19: underlying target or stop missing on the ticket; entry held (fail closed)"
+    sgn = 1.0 if rules.get("direction") == "long" else -1.0
+    reward, risk = sgn * (tgt - spot), sgn * (spot - stp)
+    if risk <= 0 or reward <= 0:
+        return False, f"C4/R19: target {tgt:g} / stop {stp:g} not on the right sides of {spot:.2f}; entry held"
+    k = _num(ticket.get("strike"))
+    if k is None:
+        po = _OCC_EXP.match(str(ticket.get("occ_symbol") or "").upper())
+        k = int(str(ticket.get("occ_symbol"))[-8:]) / 1000.0 if po else None
+    if k is not None and sgn * (k - tgt) > 1e-9:
+        return False, f"R24: strike {k:g} is beyond the target {tgt:g}; entry held"
+    macro = str(ticket.get("strategy_agent") or "").lower() in ("ptj", "ptj macro & regime strategist") or \
+        "ptj" in str(ticket.get("strategy_agent") or "").lower()
+    min_rr = 5.0 if macro else max(3.0, _num(ticket.get("min_rr")) or 3.0)
+    und_r = reward / risk
+    if und_r >= min_rr - 1e-9:
+        return True, f"underlying R {und_r:.2f} ≥ {min_rr:g}"
+    if macro or not is_zero_dte(ticket, now):
+        return False, f"R19: underlying R {und_r:.2f} < {min_rr:g} (premium R does not count here); entry held"
+    e, st = _num(ticket.get("entry")), _num(ticket.get("stop"))
+    prem = [((_num(ticket.get(f)) or 0) - e) / (e - st) for f in ("target1", "target2")
+            if e is not None and st is not None and e > st and _num(ticket.get(f)) is not None]
+    prem_r = max(prem) if prem else None
+    if prem_r is not None and prem_r >= min_rr - 1e-9 and und_r >= 1.0 - 1e-9:
+        return True, f"C4: premium R {prem_r:.2f} ≥ {min_rr:g} and underlying target {und_r:.2f}× the stop distance"
+    return False, (f"C4: underlying R {und_r:.2f} < {min_rr:g} and premium R "
+                   f"{'n/a' if prem_r is None else f'{prem_r:.2f}'} / target distance {und_r:.2f}× do not qualify; entry held")
+
+
+def vol_regime_factor(latest_doc: Optional[dict]) -> Tuple[Optional[float], str]:
+    """R23: 1/4 if VIX9D/VIX > 1.10 and VVIX > 125; 1/2 if VIX9D/VIX > 1.00 or VIX/VIX3M > 1.00 or
+    VVIX > 110; else 1. None (fail closed) if any input is missing."""
+    s = ((latest_doc or {}).get("summary") or {})
+    vix, v9, v3, vv = (_num(s.get(k)) for k in ("vix", "vix9d", "vix3m", "vvix"))
+    if None in (vix, v9, v3, vv) or vix <= 0 or v3 <= 0:
+        return None, "volatility regime inputs missing (VIX9D, VIX, VIX3M, VVIX)"
+    a, b = v9 / vix, vix / v3
+    txt = f"VIX9D/VIX {a:.3f}, VIX/VIX3M {b:.3f}, VVIX {vv:g}"
+    if a > 1.10 and vv > 125:
+        return 0.25, "vol regime quarter size (" + txt + ")"
+    if a > 1.00 or b > 1.00 or vv > 110:
+        return 0.5, "vol regime half size (" + txt + ")"
+    return 1.0, txt
+
+
+def grid_net_gex_at(latest_doc: Optional[dict], scope: str, spot: Optional[float]) -> Optional[float]:
+    """Linear read of intraday_feed.gex_by_spot.<scope>.grid at spot (None outside the grid)."""
+    if spot is None:
+        return None
+    grid = ((((latest_doc or {}).get("intraday_feed") or {}).get("gex_by_spot") or {}).get(scope) or {}).get("grid") or []
+    pts = sorted((_num(g.get("spot")), _num(g.get("net_gex"))) for g in grid
+                 if _num(g.get("spot")) is not None and _num(g.get("net_gex")) is not None)
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        if x0 <= spot <= x1 and x1 > x0:
+            return y0 + (y1 - y0) * (spot - x0) / (x1 - x0)
+    return None
+
+
+def net_gex_45d_conservative(latest_doc: Optional[dict] = None, spot: Optional[float] = None) -> Tuple[Optional[float], Dict[str, Any]]:
     """CIO rule (Nov 12 2026): wherever 45D net GEX sizes or gates, use the MORE NEGATIVE of
     (a) the GEX-by-spot grid reading at chain spot (intraday_feed.gex_by_spot.upcoming_45d
     .net_gex_at_chain_spot) and (b) the chain's printed-gamma 45D net GEX (summary
@@ -627,10 +787,15 @@ def net_gex_45d_conservative(latest_doc: Optional[dict] = None) -> Tuple[Optiona
     printed = _f((j.get("summary") or {}).get("net_gex_45d_dollars"))
     if printed is None:
         printed = _f((((j.get("gex_scopes") or {}).get("upcoming_45d") or {}).get("totals") or {}).get("net_gex"))
+    at_spot = grid_net_gex_at(j, "upcoming_45d", spot)  # R22 "read at current spot"; only ever more conservative
     vals = [v for v in (grid, printed) if v is not None]
     used = min(vals) if vals else None
-    src = None if used is None else ("grid_at_chain_spot" if used == grid else "printed_chain_gamma")
+    if used is not None and at_spot is not None:
+        used = min(used, at_spot)
+    src = None if used is None else ("grid_at_chain_spot" if used == grid else
+                                     ("printed_chain_gamma" if used == printed else "grid_at_current_spot"))
     return used, {"net_gex_45d_grid_at_chain_spot": grid, "net_gex_45d_printed": printed,
+                  "net_gex_45d_grid_at_current_spot": at_spot,
                   "net_gex_45d_used": used, "net_gex_45d_source": src}
 
 
@@ -763,6 +928,20 @@ def _parse_rvol(ut: dict, *texts: str) -> Optional[float]:
             pass
     for t in texts:
         m = _re.search(r"RVOL\s*(?:>=|≥|>)\s*(\d+(?:\.\d+)?)\s*x?", t or "", _re.I)
+        if m:
+            return float(m.group(1))
+    return None
+
+
+def _parse_rvol_max(ut: dict, *texts: str) -> Optional[float]:
+    """Upper RVOL bound written on a ticket (rvol_max, or 'RVOL < 1.2x' / 'RVOL <= 1.0x')."""
+    if ut.get("rvol_max") is not None:
+        try:
+            return float(ut["rvol_max"])
+        except Exception:
+            pass
+    for t in texts:
+        m = _re.search(r"RVOL\s*(?:<=|≤|<)\s*(\d+(?:\.\d+)?)\s*x?", t or "", _re.I)
         if m:
             return float(m.group(1))
     return None
@@ -914,6 +1093,7 @@ def parse_ticket_rules(ticket: dict) -> Dict[str, Any]:
         return r
     r["trigger_key"] = key
     r["rvol_min"] = _parse_rvol(ut, text, gate)
+    r["rvol_max"] = _parse_rvol_max(ut, text, gate)
 
     fade = _re.search(r"into\s+" + _RANGE + r"\s+that\s+(FAILS|HOLDS)\s*\(\s*close back\s+(below|above)\s+" + _NUM,
                       text, _re.I)
@@ -965,7 +1145,7 @@ def parse_ticket_rules(ticket: dict) -> Dict[str, Any]:
         r["warnings"].append(f"{tid}: unparseable underlying_trigger.{key}: {text[:120]!r}")
         return r
 
-    if r["rvol_min"] is None:
+    if r["rvol_min"] is None and not (r["mode"] == "wall_fade" and r.get("rvol_max") is not None):
         r["warnings"].append(f"{tid}: no RVOL threshold found")
         return r
 
@@ -1079,6 +1259,9 @@ def evaluate_entry(ticket: dict, or_info: dict, bars_5m: List[dict], now: dateti
     bars_5m = completed_bars(bars_5m, now)
     mode = rules["mode"]
     es, ee = rules["entry_start"], rules["entry_end"]
+    if rules.get("is_option") and is_zero_dte(ticket, now) and _hm(now) >= R24_NO_NEW_0DTE_AFTER:
+        # R24 (v1.3): no new 0DTE entries after 13:30 CT (nothing at or after 13:30:00)
+        return False, "outside entry window: R24 no new 0DTE entries after 13:30 CT", {}
     if not _in_window(now, es, ee):
         return False, f"outside entry window {es[0]:02d}:{es[1]:02d}–{ee[0]:02d}:{ee[1]:02d} CT", {}
     if mode == "reclaim":
@@ -1101,7 +1284,7 @@ def evaluate_entry(ticket: dict, or_info: dict, bars_5m: List[dict], now: dateti
     # New-style tickets require a measured time-of-day RVOL (missing => no fire).
     rvol = or_info.get("tod_rvol")
     bar_rvol = or_info.get("bar_rvol")
-    rvol_min = float(rules["rvol_min"])
+    rvol_min = float(rules["rvol_min"]) if rules.get("rvol_min") is not None else None
     short = rules["direction"] == "short"
     meta = {"mode": mode, "spy": latest["c"], "rvol": rvol, "bar_rvol": bar_rvol, "rvol_min": rvol_min,
             "trigger_bar_ct": latest["_dt"].strftime("%H:%M")}
@@ -1173,6 +1356,25 @@ def evaluate_entry(ticket: dict, or_info: dict, bars_5m: List[dict], now: dateti
                     return False, f"waiting: half-size RVOL tier needs a {n2}-bar hold ({tier['why']})", meta
             factors.append(0.5); reasons.append("RVOL half tier")
         rv_txt = tier["why"]
+    elif mode == "wall_fade":
+        # CIO ruling (Nov 12 PM): BOTH R16 and the ticket's own RVOL rule; the stricter wins.
+        # R16: disarm the fade when time-of-day RVOL >= 1.2x on the break; rejection bar <= 1.0x its slot.
+        if rvol is None:
+            return False, "waiting: RVOL unavailable (fail closed)", meta
+        if rvol_min is not None and rvol < rvol_min:
+            return False, f"waiting: RVOL {rvol:.2f} < ticket minimum {rvol_min}", meta
+        cap = R16_FADE_DISARM_RVOL
+        if rules.get("rvol_max") is not None:
+            cap = min(cap, float(rules["rvol_max"]))
+        if rvol >= cap - 1e-12:
+            meta["r16_disarm"] = True
+            return False, (f"waiting: fade disarmed (R16/ticket): RVOL {rvol:.2f} ≥ {cap:g}"
+                           + ("; ticket minimum makes this fade unfireable" if rvol_min is not None and rvol_min >= cap else "")), meta
+        if bar_rvol is None or float(bar_rvol) > R16_REJECTION_BAR_MAX + 1e-12:
+            return False, (f"waiting: R16 rejection bar must be ≤ {R16_REJECTION_BAR_MAX:g}× its slot "
+                           f"(bar {('n/a' if bar_rvol is None else f'{float(bar_rvol):.2f}')}×; fail closed when unavailable)"), meta
+        rv_txt = (f"RVOL {rvol:.2f}" + (f" ≥ {rvol_min}" if rvol_min is not None else "") + f" and < {cap:g} (R16); "
+                  f"rejection bar {float(bar_rvol):.2f}× ≤ {R16_REJECTION_BAR_MAX:g}×")
     else:
         if rvol is None or rvol < rvol_min:
             return False, f"waiting: RVOL {rvol if rvol is not None else 'n/a'} < {rvol_min} (fail closed when unavailable)", meta
@@ -1370,10 +1572,16 @@ def arm_time_gates(pe, ticket: dict, rules: dict, meta: dict, bars_5m: List[dict
     tid = ticket.get("ticket_id")
     done = completed_bars(bars_5m, now)
     spot = done[-1]["c"] if done else None
-    ok, why = live_wall_check(spot, now, latest_doc, cfg)
-    if not ok:
-        return {"action": "hold", "ticket": ticket, "why": why}
-    g45, g45_info = net_gex_45d_conservative(latest_doc)
+    wc = wall_check(spot, now, latest_doc, cfg)
+    why = wc["why"]
+    if not wc["ok"]:
+        out = {"action": "hold", "ticket": ticket, "why": why}
+        if wc["code"] == "stale":
+            out.update({"kind": "WALL_STALE", "wall_age_min": wc["age_min"]})
+        return out
+    if latest_doc is None:
+        latest_doc = load_latest()
+    g45, g45_info = net_gex_45d_conservative(latest_doc, spot)
     g45_txt = (f"45D net GEX grid {g45_info['net_gex_45d_grid_at_chain_spot']} / printed "
                f"{g45_info['net_gex_45d_printed']} → used {g45}")
     if g45 is None:
@@ -1383,7 +1591,18 @@ def arm_time_gates(pe, ticket: dict, rules: dict, meta: dict, bars_5m: List[dict
     reasons = list(meta.get("size_reasons") or [])
     if g45 < GEX45_CAP_DOLLARS:
         factors.append(0.5); reasons.append("45D net GEX < -$5B (more negative of grid/printed)")
-    meta = {**meta, "size_factor": combine_size_factors(factors), "size_factors": factors, "size_reasons": reasons}
+    vf, vwhy = vol_regime_factor(latest_doc)  # R23
+    if vf is None:
+        return {"action": "hold", "ticket": ticket, "gex45": g45_info, "why": f"R23 {vwhy}; entry held (fail closed)"}
+    if vf < 1.0:
+        factors.append(vf); reasons.append(vwhy)
+    # R21 is relative to the 0.25% base: factors the card already applied when staging
+    # (ticket.size_factors_applied) are counted once, never multiplied in again.
+    pre = [float(x) for x in (ticket.get("size_factors_applied") or []) if _num(x) is not None and 0 < float(x) < 1]
+    total = combine_size_factors(pre + factors)
+    rel = total / combine_size_factors(pre) if pre else total
+    meta = {**meta, "size_factor": min(1.0, rel), "size_factors": factors, "size_reasons": reasons,
+            "size_factor_vs_base": total, "size_factors_applied_at_staging": pre}
     t = dict(ticket)
     t["gex45_check"] = {**g45_info, "cap_applied": g45 < GEX45_CAP_DOLLARS}
     mult = 100 if not _is_stock(t) else 1
@@ -1395,13 +1614,23 @@ def arm_time_gates(pe, ticket: dict, rules: dict, meta: dict, bars_5m: List[dict
     for f in ("entry", "stop", "target1", "target2", "quantity", "actual_dollar_risk"):
         t[f] = t.get(f"staged_{f}")
     if not _is_stock(t):
+        c4ok, c4why = c4_check(t, rules, spot, now)
+        if not c4ok:
+            return {"action": "hold", "ticket": ticket, "gex45": g45_info, "why": c4why}
         occ, _, _ = resolve_occ(pe, t)
         quote, qwhy = option_live_quote(pe, occ)
         if quote is None:  # one retry inside the tick before voiding
             quote, qwhy = option_live_quote(pe, occ)
         rp, rwhy = reprice_option_ticket(t, rules, quote, spot, now, cfg)
         if rp is None:
-            return {"action": "void", "ticket": ticket, "why": f"Stale premium: {rwhy if quote else qwhy}; ticket voided (no chase)"}
+            if quote is not None and rwhy.startswith("contract delta"):
+                return {"action": "void", "ticket": ticket, "plain": "Voided: contract no longer in the 0.35–0.50 delta band",
+                        "why": f"R24 contract spec: {rwhy}; ticket voided (no chase)"}
+            if quote is not None and ("budget" in rwhy or "invalid" in rwhy):
+                return {"action": "void", "ticket": ticket, "plain": "Voided: live premium risk above the approved budget",
+                        "why": f"Stale premium: {rwhy}; ticket voided (no chase)"}
+            return {"action": "void", "ticket": ticket, "plain": "Voided: quote stale or spread too wide",
+                    "why": f"Stale premium: {rwhy if quote else qwhy}; ticket voided (no chase)"}
         t.update({k: v for k, v in rp.items() if k != "reprice"})
         t["arm_reprice"] = rp["reprice"]
         t["oco_bracket"] = {**(t.get("oco_bracket") or {}), "stop_order": t["stop"],
@@ -1410,13 +1639,46 @@ def arm_time_gates(pe, ticket: dict, rules: dict, meta: dict, bars_5m: List[dict
     q0 = int(t.get("quantity") or 0)
     q = int(q0 * factor) if factor < 1.0 else q0
     if q < 1:
-        return {"action": "hold", "ticket": ticket,
-                "why": f"Size ×{factor:g} ({', '.join(meta.get('size_reasons') or [])}) rounds {q0} to 0; entry held"}
+        # CIO ruling 7: round down; 0 contracts => SKIP the ticket for this trigger, never a full contract
+        return {"action": "skip", "ticket": ticket, "kind": "ENTRY_SKIPPED",
+                "why": f"Size ×{factor:g} ({', '.join(meta.get('size_reasons') or [])}) rounds {q0} to 0; ticket skipped (never a full contract)"}
     t["quantity"] = q
     t["size_factor"] = factor
+    t["size_factor_vs_base"] = meta.get("size_factor_vs_base", factor)
     t["size_reasons"] = meta.get("size_reasons") or []
     t["actual_dollar_risk"] = round(abs(float(t["entry"]) - float(t["stop"])) * q * mult, 2)
     return {"action": "submit", "ticket": t, "why": f"{why}; {g45_txt}", "gex45": g45_info}
+
+
+def fetch_option_completed_bars(pe, occ: str, now: datetime) -> List[dict]:
+    """Today's COMPLETED 5m bars for one option contract from the Alpaca data host (read only).
+    Each bar: {"_dt": bar start (CT), "c": close}. Empty list on any error."""
+    try:
+        start = now.astimezone(CT).replace(hour=8, minute=30, second=0, microsecond=0).astimezone(timezone.utc)
+        d = pe.alpaca_request("GET", pe.ALPACA_DATA_HOST, "/v1beta1/options/bars",
+                              params={"symbols": occ, "timeframe": "5Min", "limit": 200,
+                                      "start": start.strftime("%Y-%m-%dT%H:%M:%SZ")}, timeout=15) or {}
+        raw = ((d.get("bars") or {}).get(occ) or []) if isinstance(d, dict) else []
+        out = []
+        for b in raw:
+            dt = parse_bar_ts(str(b.get("t"))).astimezone(CT)
+            out.append({"_dt": dt, "c": float(b["c"])})
+        return [b for b in out if b["_dt"] + timedelta(minutes=BAR_MINUTES) <= now]
+    except Exception:
+        return []
+
+
+def completed_progress_price(bars: List[dict], since: Optional[datetime], now: datetime) -> Optional[Tuple[float, str]]:
+    """Close of the latest completed 5m bar that ENDED after `since` (the fill). None if none."""
+    best = None
+    for b in bars or []:
+        dt = b.get("_dt") or _bar_dt(b)
+        end = dt + timedelta(minutes=BAR_MINUTES)
+        if end > now or (since is not None and end <= since):
+            continue
+        if best is None or dt > best[0]:
+            best = (dt, float(b["c"]))
+    return None if best is None else (best[1], best[0].strftime("%H:%M"))
 
 
 ACTIVE_STATUSES = {"submitted_paper", "filled_paper"}
@@ -1561,6 +1823,25 @@ def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dic
             t2 = float(ticket.get("target2") or (ticket.get("oco_bracket") or {}).get("take_profit_2") or 4.85)
         risk_unit = abs(entry - stop) if entry and stop else float(ticket.get("risk_per_unit") or 0.6)
 
+        # CIO ruling 5 (Nov 12 PM): protective stops / invalidation / kill switch / EOD flat act on
+        # live or forming prices (below, unchanged). Scale-outs (T1/T2) and time-stop R use the
+        # close of the last COMPLETED 5m bar that ended after the fill (option bars for options,
+        # underlying bars for stock tickets).
+        _fa = ticket.get("alpaca_filled_ct") or (entry_order or {}).get("filled_at")
+        _since = None
+        try:
+            if isinstance(_fa, str) and "T" in _fa:
+                _since = parse_bar_ts(_fa) if _fa.endswith("Z") or "+" in _fa[-6:] else datetime.fromisoformat(_fa)
+                if _since.tzinfo is None:
+                    _since = _since.replace(tzinfo=CT)
+                _since = _since.astimezone(CT)
+        except Exception:
+            _since = None
+        _src = (completed_bars(bars_5m, now) if stock else fetch_option_completed_bars(pe, occ, now))
+        _pp = completed_progress_price(_src, _since, now)
+        prog_px = _pp[0] if _pp else None
+        prog_txt = f"completed {_pp[1]} bar close {_pp[0]}" if _pp else "no completed bar since fill"
+
         # Breakeven: once the T1 scale-out has (partially) filled, the remaining contracts'
         # stop moves to the entry premium. Persisted on the ticket so it survives order-list paging.
         be_note = ""
@@ -1634,9 +1915,9 @@ def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dic
         # so T1/T2 scaling stays at the broker. Options are scaled here.
         if not stock:
             t1_done = any(e.get("ticket_id") == tid and e.get("kind") == "TARGET1_SCALED" for e in events_doc.get("events") or [])
-            if mark >= t1 and qty >= 2 and not t1_done:
+            if prog_px is not None and prog_px >= t1 and qty >= 2 and not t1_done:
                 if force_sim:
-                    append_event(events_doc, "TARGET1_SCALED", tid, f"[SIM] T1 scale {occ}", f"mark {mark} >= {t1}", "pos", occ)
+                    append_event(events_doc, "TARGET1_SCALED", tid, f"[SIM] T1 scale {occ}", f"{prog_txt} >= {t1}", "pos", occ)
                 else:
                     sell_qty = max(1, int(qty // 2))
                     try:
@@ -1647,15 +1928,15 @@ def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dic
                         })
                         append_event(events_doc, "TARGET1_SCALED", tid,
                                      f"TARGET1 SCALED: sold {sell_qty}× {occ} @ ≥${t1}",
-                                     f"T1 limit order placed; remaining stop moves to breakeven (entry {entry}) once T1 fills",
+                                     f"T1 limit order placed ({prog_txt}); remaining stop moves to breakeven (entry {entry}) once T1 fills",
                                      "pos", occ)
                         notes.append(f"T1:{tid}")
                     except Exception as e:
                         notes.append(f"T1_fail:{e}")
 
             t2_done = any(e.get("ticket_id") == tid and e.get("kind") == "TARGET2_CLOSED" for e in events_doc.get("events") or [])
-            if mark >= t2 and not t2_done:
-                _close("TARGET2_CLOSED", f"TARGET2 CLOSED: sold remaining {occ}", f"mark {mark} >= {t2}")
+            if prog_px is not None and prog_px >= t2 and not t2_done:
+                _close("TARGET2_CLOSED", f"TARGET2 CLOSED: sold remaining {occ}", f"{prog_txt} >= {t2}")
                 continue
 
         # Time stop: legacy 50m/-0.5R + 60m/<0R; otherwise parsed from ticket.time_stop
@@ -1668,7 +1949,17 @@ def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dic
                     if ft.tzinfo is None:
                         ft = ft.replace(tzinfo=CT)
                     mins = (now - ft.astimezone(CT)).total_seconds() / 60.0
-                    pnl_r = (sgn * (mark - entry) / risk_unit) if risk_unit else 0
+                    # time-stop R on the last completed bar close; the live mark is used only when no
+                    # bar has completed since the fill (illiquid contract), and that is labelled.
+                    _px = prog_px if prog_px is not None else mark
+                    _lbl = prog_txt if prog_px is not None else f"live mark {mark} (no completed bar since fill)"
+                    pnl_r = (sgn * (_px - entry) / risk_unit) if risk_unit else 0
+                    if not stock and rules.get("ok") and is_zero_dte(ticket, now):
+                        # R24 (v1.3) + P1: 30-minute time stop if progress < +0.5R, R measured on the premium
+                        if mins >= R24_TIME_STOP_MIN and pnl_r < R24_TIME_STOP_R:
+                            _close("TIME_STOP_EXIT", f"TIME STOP: flat {occ}",
+                                   f"R24: {mins:.0f}m since fill · premium PnL {pnl_r:.2f}R < {R24_TIME_STOP_R}R ({_lbl})")
+                            continue
                     if ts.get("legacy") or not rules.get("ok"):
                         if mins >= 50 and pnl_r < -0.5:
                             _close("TIME_STOP_EXIT", f"TIME STOP: flat {occ}", f"{mins:.0f}m since fill · PnL {pnl_r:.2f}R")
@@ -1679,7 +1970,7 @@ def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dic
                     elif ts.get("minutes") is not None:
                         if mins >= ts["minutes"] and pnl_r < float(ts.get("min_progress_r", 0.0)):
                             _close("TIME_STOP_EXIT", f"TIME STOP: flat {occ}",
-                                   f"{mins:.0f}m since fill · PnL {pnl_r:.2f}R < {ts.get('min_progress_r', 0.0)}R")
+                                   f"{mins:.0f}m since fill · PnL {pnl_r:.2f}R < {ts.get('min_progress_r', 0.0)}R ({_lbl})")
                             continue
             except Exception:
                 pass
@@ -2207,6 +2498,28 @@ def alpaca_rth_tick(pe, force_sim: bool = False, push_if_changed: bool = False,
         try:
             g = arm_time_gates(pe, ticket, rules, meta, bars, now, events_doc, force_sim, latest_doc, cfg)
             sym = ((ticket.get("alpaca_paper_payload") or {}).get("order") or {}).get("symbol") or ticket.get("symbol") or ""
+            if g["action"] == "hold" and g.get("kind") == "WALL_STALE":
+                age = g.get("wall_age_min")
+                snap = (now - timedelta(minutes=float(age))).strftime("%Y-%m-%dT%H:%M") if age is not None else "unknown"
+                if not any(e.get("ticket_id") == tid and e.get("kind") == "WALL_STALE" and e.get("wall_snapshot_ct") == snap
+                           for e in events_doc.get("events") or []):
+                    append_event(events_doc, "WALL_STALE", tid, f"Entry held: 0DTE wall data stale ({tid})", g["why"],
+                                 severity="warn", symbol=sym,
+                                 extra={"reason_code": "WALL_STALE", "wall_age_min": age, "wall_snapshot_ct": snap})
+                changed = True
+                result["actions"].append(f"hold:WALL_STALE:{tid}:{age}")
+                continue
+            if g["action"] == "skip":
+                if force_sim:
+                    append_event(events_doc, "ENTRY_SKIPPED", tid, f"[SIM] Entry would be skipped: {tid}", g["why"], "warn", sym)
+                else:
+                    rewrite_blotter_ticket(tid, lambda t, _w=g["why"]: {**t, "status": "skipped_paper", "skip_reason": _w,
+                                                                     "skip_reason_plain": "Skipped: reduced size rounds to zero contracts",
+                                                                     "skipped_ct": _iso_ct()})
+                    append_event(events_doc, "ENTRY_SKIPPED", tid, f"Entry skipped (size rounds to zero): {tid}", g["why"], "warn", sym)
+                changed = True
+                result["actions"].append(f"skipped:{tid}:{g['why']}")
+                continue
             if g["action"] == "hold":
                 _log_once(events_doc, "SUBMIT_BLOCKED", tid, f"Entry not submitted: {tid}", g["why"], sym)
                 if g.get("gex45"):
@@ -2220,8 +2533,9 @@ def alpaca_rth_tick(pe, force_sim: bool = False, push_if_changed: bool = False,
                 if force_sim:
                     append_event(events_doc, "TICKET_VOIDED", tid, f"[SIM] Ticket would be voided: {tid}", g["why"], "warn", sym)
                 else:
-                    rewrite_blotter_ticket(tid, lambda t, _w=g["why"]: {**t, "status": "voided_paper",
-                                                                     "void_reason": _w, "voided_ct": _iso_ct()})
+                    rewrite_blotter_ticket(tid, lambda t, _w=g["why"], _p=g.get("plain"): {
+                        **t, "status": "voided_paper", "void_reason": _w,
+                        "void_reason_plain": _p or "Voided: quote stale or spread too wide", "voided_ct": _iso_ct()})
                     append_event(events_doc, "TICKET_VOIDED", tid, f"Ticket voided at arm time: {tid}", g["why"], "neg", sym)
                 changed = True
                 result["actions"].append(f"voided:{tid}:{g['why']}")
@@ -2231,7 +2545,7 @@ def alpaca_rth_tick(pe, force_sim: bool = False, push_if_changed: bool = False,
                 _new = ticket
                 rewrite_blotter_ticket(tid, lambda t, _n=_new: {**t, **{k: _n[k] for k in _n if k.startswith("staged_") or k in (
                     "entry", "stop", "target1", "target2", "quantity", "actual_dollar_risk", "oco_bracket",
-                    "arm_reprice", "size_factor", "size_reasons", "gex45_check")}})
+                    "arm_reprice", "size_factor", "size_factor_vs_base", "size_reasons", "gex45_check")}})
             sub = submit_ticket(pe, ticket, reason, or_info, events_doc, force_sim=force_sim)
             changed = True
             result["actions"].append({"submit": sub, "reason": reason, "meta": meta})

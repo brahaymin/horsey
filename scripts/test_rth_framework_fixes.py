@@ -335,12 +335,18 @@ class _TPE:
 
 
 # ------------------------------------------------------------------ (d) live 0DTE walls
-def latest_walls(put, call, ts=f"{DAY_S}T09:20:00-0600", printed45=-1.0e9, grid45=None):
-    d = {"summary": {"put_wall_0dte": put, "call_wall_0dte": call, "timestamp_ct": ts}}
+CALM_VOL = {"vix": 18.0, "vix9d": 17.0, "vix3m": 20.0, "vvix": 95.0}
+
+
+def latest_walls(put, call, ts=f"{DAY_S}T09:20:00-0600", printed45=-1.0e9, grid45=None, vol=CALM_VOL, grid=None):
+    d = {"summary": {"put_wall_0dte": put, "call_wall_0dte": call, "timestamp_ct": ts, **(vol or {})}}
+    if grid is not None:
+        d["intraday_feed"] = {"gex_by_spot": {"upcoming_45d": {"grid": grid}}}
     if printed45 is not None:
         d["summary"]["net_gex_45d_dollars"] = printed45
     if grid45 is not None:
-        d["intraday_feed"] = {"gex_by_spot": {"upcoming_45d": {"net_gex_at_chain_spot": grid45}}}
+        d.setdefault("intraday_feed", {"gex_by_spot": {"upcoming_45d": {}}})
+        d["intraday_feed"]["gex_by_spot"]["upcoming_45d"]["net_gex_at_chain_spot"] = grid45
     return d
 
 
@@ -379,7 +385,8 @@ class Reprice(_FW):
         self.assertEqual(why, "ok")
         self.assertEqual(rp["entry"], 1.22)
         d = 761.0 - 759.8
-        self.assertEqual(rp["stop"], round(1.20 - (0.45 * d + 0.5 * 0.08 * d * d) - 0.05, 2))
+        self.assertEqual(rp["stop"], round(1.20 - 0.45 * d + 0.5 * 0.08 * d * d - 0.05, 2))  # v1.3 sign (PTJ-agreed)
+        self.assertEqual(rp["reprice"]["stop_method"], "greeks_R24_v1.3")
         r_old, r_new = 0.60, rp["entry"] - rp["stop"]
         self.assertAlmostEqual(rp["target1"], round(1.22 + 3.0 * r_new, 2), places=2)
         self.assertLessEqual(rp["quantity"] * r_new * 100, 4 * r_old * 100 + 1e-6)
@@ -393,8 +400,27 @@ class Reprice(_FW):
 
     def test_void_when_risk_exceeds_budget(self):
         t = CALL(quantity=1, actual_dollar_risk=60.0)
-        rp, why = rth.reprice_option_ticket(t, self.rules(t), quote(3.98, 4.02, delta=0.3, gamma=0.02), 761.5, at(10, 0))
+        rp, why = rth.reprice_option_ticket(t, self.rules(t), quote(3.98, 4.02, delta=0.4, gamma=0.02), 761.5, at(10, 0))
         self.assertIsNone(rp); self.assertIn("budget", why)
+
+    def test_r24_delta_band_at_trigger(self):
+        t = CALL()
+        for dl in (0.30, 0.55, None):
+            rp, why = rth.reprice_option_ticket(t, self.rules(t), quote(1.18, 1.22, delta=dl), 761.0, at(10, 0))
+            self.assertIsNone(rp, dl); self.assertIn("delta", why)
+        for dl in (0.35, 0.50, -0.42):
+            self.assertIsNotNone(rth.reprice_option_ticket(t, self.rules(t), quote(1.18, 1.22, delta=dl), 761.0, at(10, 0))[0], dl)
+        # not 0DTE: the band is not applied
+        wk = CALL(option_expiration="2030-11-15", occ_symbol="SPY301115C00760000")
+        self.assertIsNotNone(rth.reprice_option_ticket(wk, self.rules(wk), quote(1.18, 1.22, delta=0.25), 761.0, at(10, 0))[0])
+        g = self.gates(CALL(), {}, quote(1.98, 2.02, delta=0.6))
+        self.assertEqual(g["action"], "void"); self.assertIn("R24", g["why"]); self.assertIn("delta", g["plain"])
+
+    def test_working_stop_nearer_than_invalidation_is_used(self):
+        t = CALL(underlying_stop=760.5)  # nearer than the 759.80 hard invalidation
+        rp, _ = rth.reprice_option_ticket(t, self.rules(t), quote(1.18, 1.22), 761.0, at(10, 0))
+        self.assertEqual(rp["reprice"]["underlying_stop_used"], 760.5)
+        self.assertEqual(rp["stop"], round(1.20 - 0.45 * 0.5 + 0.5 * 0.08 * 0.25 - 0.05, 2))
 
     def gates(self, t, meta, q, walls=latest_walls(756, 761, f"{DAY_S}T09:50:00-0600")):
         class QPE(_TPE):
@@ -407,6 +433,10 @@ class Reprice(_FW):
                 return {"snapshots": {occ: {"latestQuote": {"bp": q["bid"], "ap": q["ask"], "t": q["t"]},
                                             "greeks": {"delta": q["delta"], "gamma": q["gamma"]}}}}
         bars = T.or_bars(759.0, 760.4) + [bar(9, 50, 761.0, 761.6, 760.9, 761.5)]
+        if "underlying_target" not in t:
+            t = {**t, "underlying_target": 766.0}
+        if "underlying_stop" not in t:
+            t = {**t, "underlying_stop": 761.0}  # working stop 0.5 below the 761.5 trigger close (underlying R 9 => R19 passes)
         return rth.arm_time_gates(QPE, t, self.rules(t), meta, bars, at(10, 0), {"events": []}, False, walls)
 
     def test_gates_void_without_quote(self):
@@ -418,25 +448,25 @@ class Reprice(_FW):
         self.assertEqual(g["action"], "hold")
 
     def test_gates_submit_repriced_and_halved(self):
-        g = self.gates(CALL(), {"size_factor": 0.5, "size_reasons": ["reclaim armed before 09:00 CT"]}, quote(1.98, 2.02, delta=0.25, gamma=0.02))
+        g = self.gates(CALL(), {"size_factor": 0.5, "size_reasons": ["reclaim armed before 09:00 CT"]}, quote(1.98, 2.02, delta=0.40, gamma=0.02))
         self.assertEqual(g["action"], "submit", g["why"])
         tk = g["ticket"]
         self.assertEqual((tk["staged_entry"], tk["staged_quantity"]), (2.0, 4))
         self.assertEqual(tk["entry"], 2.02)
-        self.assertEqual(tk["arm_reprice"]["stop_method"], "greeks_R24")
+        self.assertEqual(tk["arm_reprice"]["stop_method"], "greeks_R24_v1.3")
         self.assertEqual(tk["quantity"], 2)  # budget 4 contracts at the repriced risk, then x0.5
         self.assertAlmostEqual(tk["actual_dollar_risk"], round((tk["entry"] - tk["stop"]) * 2 * 100, 2))
         # re-arm recomputes from staged values, never from an already-halved quantity
-        g2 = self.gates(tk, {}, quote(1.98, 2.02, delta=0.25, gamma=0.02))
+        g2 = self.gates(tk, {}, quote(1.98, 2.02, delta=0.40, gamma=0.02))
         self.assertEqual(g2["ticket"]["quantity"], 4)
 
-    def test_half_size_of_one_contract_holds(self):
-        g = self.gates(CALL(quantity=1, actual_dollar_risk=60.0), {"size_factor": 0.5, "size_reasons": ["x"]},
-                       quote(1.98, 2.02, delta=0.25, gamma=0.02))
-        self.assertEqual(g["action"], "hold"); self.assertIn("rounds 1 to 0", g["why"])
+    def test_half_size_of_one_contract_skips(self):
+        g = self.gates(CALL(quantity=1, actual_dollar_risk=60.0), {"size_factor": 0.5, "size_factors": [0.5], "size_reasons": ["x"]},
+                       quote(1.98, 2.02, delta=0.40, gamma=0.02))
+        self.assertEqual(g["action"], "skip"); self.assertIn("rounds 1 to 0", g["why"]); self.assertEqual(g["kind"], "ENTRY_SKIPPED")
 
     def test_tick_voids_ticket_and_never_rearms(self):
-        t = CALL(session_target=DAY_S)
+        t = CALL(session_target=DAY_S, underlying_target=766.0)
         bars = T.or_bars(759.0, 760.4) + [bar(9, 30, 760.4, 761.2, 760.3, 761.0, 2000)]
         rewrites, submits = [], []
         for k, v in {"_now_ct": lambda: at(9, 36), "armed_tickets": lambda: [t], "load_events": lambda: {"events": []},
@@ -474,7 +504,7 @@ class Gex45Conservative(_FW):
         self.assertEqual(rth.net_gex_45d_conservative(latest_walls(756, 761, printed45=None))[0], None)
 
     def test_cap_applies_on_either_reading_and_logs_both(self):
-        q = quote(1.98, 2.02, delta=0.25, gamma=0.02)
+        q = quote(1.98, 2.02, delta=0.40, gamma=0.02)
         for p45, g45, exp_qty in ((-1.6e9, -6.7e9, 2), (-7.9e9, -1.0e9, 2), (-1.6e9, -1.0e9, 4), (-1.6e9, None, 4)):
             g = self.gates(CALL(), {}, q, walls=latest_walls(756, 761, f"{DAY_S}T09:50:00-0600", printed45=p45, grid45=g45))
             self.assertEqual(g["action"], "submit", g["why"])
@@ -485,12 +515,12 @@ class Gex45Conservative(_FW):
 
     def test_cap_does_not_stack_beyond_smallest_factor(self):
         g = self.gates(CALL(), {"size_factor": 0.5, "size_factors": [0.5], "size_reasons": ["reclaim armed before 09:00 CT"]},
-                       quote(1.98, 2.02, delta=0.25, gamma=0.02),
+                       quote(1.98, 2.02, delta=0.40, gamma=0.02),
                        walls=latest_walls(756, 761, f"{DAY_S}T09:50:00-0600", printed45=-7.9e9))
         self.assertEqual(g["ticket"]["quantity"], 2)  # min(1/2, 1/2) = 1/2, not 1/4
 
     def test_both_missing_fails_closed(self):
-        g = self.gates(CALL(), {}, quote(1.98, 2.02, delta=0.25, gamma=0.02),
+        g = self.gates(CALL(), {}, quote(1.98, 2.02, delta=0.40, gamma=0.02),
                        walls=latest_walls(756, 761, f"{DAY_S}T09:50:00-0600", printed45=None))
         self.assertEqual(g["action"], "hold"); self.assertIn("45D net GEX unavailable", g["why"])
 
@@ -550,6 +580,248 @@ class CancelScan(_FW):
         self.p.set(pe, "alpaca_request", b.request)
         dup, why = rth.already_submitted(pe, CALL(), {"events": []})
         self.assertTrue(dup, why)
+
+# ------------------------------------------------------------------ CIO rulings Nov 12 PM / framework v1.3
+def _tick_env(case, t, bars, now, latest, extra=None):
+    rewrites, submits = [], []
+    env = {"_now_ct": lambda: now, "armed_tickets": lambda: [t], "load_events": lambda: {"events": []},
+           "save_events": lambda d: None, "rewrite_blotter_ticket": lambda tid, fn: rewrites.append(fn(dict(t))),
+           "fetch_alpaca_bars": lambda *a: [dict(b) for b in bars], "manage_open_positions": lambda *a, **k: [],
+           "push_vault_if_changed": lambda *a: {}, "already_submitted": lambda *a: (False, "clear"),
+           "live_rvol": lambda *a, **k: {"tod_rvol": 2.0}, "submit_ticket": lambda *a, **k: submits.append(1),
+           "load_latest": lambda: latest}
+    env.update(extra or {})
+    for k, v in env.items():
+        case.p.set(rth, k, v)
+    return rewrites, submits
+
+
+class WallStale(_FW):
+    rules = Reprice.rules
+    gates = Reprice.gates
+
+    def test_stale_walls_logged_with_distinct_reason_and_age(self):
+        r = rth.wall_check(762.0, at(11, 0), latest_walls(756, 761, f"{DAY_S}T09:20:00-0600"))
+        self.assertEqual((r["ok"], r["code"], r["age_min"]), (False, "stale", 100.0))
+        self.assertEqual(rth.wall_check(758.0, at(9, 30), latest_walls(760, 760))["code"], "equal")
+        self.assertEqual(rth.wall_check(758.0, at(9, 30), {})["code"], "missing")
+        g = self.gates(CALL(), {}, quote(1.98, 2.02), walls=latest_walls(756, 761, f"{DAY_S}T08:20:00-0600"))
+        self.assertEqual((g["action"], g["kind"], g["wall_age_min"]), ("hold", "WALL_STALE", 100.0))
+
+    def test_tick_logs_wall_stale_event_once_per_snapshot(self):
+        t = CALL(session_target=DAY_S, underlying_target=766.0, underlying_stop=760.5)
+        bars = T.or_bars(759.0, 760.4) + [bar(10, 50, 760.4, 761.2, 760.3, 761.0, 2000)]
+        doc = {"events": []}
+        rewrites, submits = _tick_env(self, t, bars, at(10, 56), latest_walls(756, 761, f"{DAY_S}T09:20:00-0600"),
+                                      {"load_events": lambda: doc})
+        res = rth.alpaca_rth_tick(_TPE)
+        ev = [e for e in doc["events"] if e["kind"] == "WALL_STALE"]
+        self.assertEqual(len(ev), 1); self.assertEqual(ev[0]["reason_code"], "WALL_STALE")
+        self.assertEqual(ev[0]["wall_age_min"], 96.0); self.assertIn("96 min old", ev[0]["detail"])
+        self.assertEqual(submits, [])
+        rth.alpaca_rth_tick(_TPE)
+        self.assertEqual(len([e for e in doc["events"] if e["kind"] == "WALL_STALE"]), 1)
+
+
+class SkipOnZeroContracts(_FW):
+    def test_tick_skips_ticket_never_full_contract(self):
+        t = CALL(session_target=DAY_S, quantity=1, actual_dollar_risk=60.0, underlying_target=766.0, underlying_stop=760.5)
+        bars = T.or_bars(759.0, 760.4) + [bar(9, 30, 760.4, 761.2, 760.3, 761.0, 2000)]
+        lat = latest_walls(756, 761, f"{DAY_S}T09:20:00-0600", printed45=-7.0e9)  # 45D cap => x1/2
+
+        class QPE(_TPE):
+            @staticmethod
+            def alpaca_request(method, host, path, body=None, params=None, timeout=20):
+                if "options/snapshots" in path:
+                    q = quote(1.98, 2.02, delta=0.40, gamma=0.02)
+                    q["t"] = (at(9, 36) - timedelta(seconds=3)).astimezone(rth.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                    return {"snapshots": {params["symbols"]: {"latestQuote": {"bp": q["bid"], "ap": q["ask"], "t": q["t"]},
+                                                              "greeks": {"delta": q["delta"], "gamma": q["gamma"]}}}}
+                return {"is_open": True}
+        rewrites, submits = _tick_env(self, t, bars, at(9, 36), lat)
+        res = rth.alpaca_rth_tick(QPE)
+        self.assertEqual(submits, [])
+        self.assertEqual(rewrites[-1]["status"], "skipped_paper")
+        self.assertIn("skipped_paper", rth.DONE_STATUSES)
+        self.assertTrue(any(str(a).startswith("skipped:") for a in res["actions"]))
+
+
+class C4Check(_FW):
+    rules = Reprice.rules
+    gates = Reprice.gates
+
+    def t(self, **kw):
+        return CALL(**kw)
+
+    def test_missing_target_fails_closed(self):
+        ok, why = rth.c4_check(self.t(), rth.parse_ticket_rules(self.t()), 761.0, at(10, 0))
+        self.assertFalse(ok); self.assertIn("missing", why)
+
+    def test_underlying_r_passes(self):
+        t = self.t(underlying_target=765.0)  # 4.0 vs 1.2 => 3.3R
+        self.assertTrue(rth.c4_check(t, rth.parse_ticket_rules(t), 761.0, at(10, 0))[0])
+
+    def test_premium_r_counts_only_on_0dte_with_target_ge_1x_stop(self):
+        t = self.t(underlying_target=762.5)  # 1.5 vs 1.2 => 1.25x stop; premium R (3.80-2)/0.6 = 3.0
+        ok, why = rth.c4_check(t, rth.parse_ticket_rules(t), 761.0, at(10, 0))
+        self.assertTrue(ok, why); self.assertIn("C4", why)
+        t = self.t(underlying_target=762.0)  # 1.0 vs 1.2 => 0.83x: premium R does not count
+        self.assertFalse(rth.c4_check(t, rth.parse_ticket_rules(t), 761.0, at(10, 0))[0])
+        t = self.t(underlying_target=762.5, target1=3.0, target2=3.5)  # premium R 2.5 < 3
+        self.assertFalse(rth.c4_check(t, rth.parse_ticket_rules(t), 761.0, at(10, 0))[0])
+        wk = self.t(underlying_target=762.5, option_expiration="2030-11-15", occ_symbol="SPY301115C00760000")
+        self.assertFalse(rth.c4_check(wk, rth.parse_ticket_rules(wk), 761.0, at(10, 0))[0])
+
+    def test_ptj_macro_needs_5_to_1_on_underlying(self):
+        t = self.t(underlying_target=766.0, strategy_agent="PTJ Macro & Regime Strategist")  # 5/1.2 = 4.2R
+        self.assertFalse(rth.c4_check(t, rth.parse_ticket_rules(t), 761.0, at(10, 0))[0])
+        t = self.t(underlying_target=767.5, strategy_agent="PTJ Macro & Regime Strategist")  # 5.4R
+        self.assertTrue(rth.c4_check(t, rth.parse_ticket_rules(t), 761.0, at(10, 0))[0])
+
+    def test_strike_beyond_target_blocked(self):
+        t = self.t(underlying_target=759.9 + 6, strike=767.0, occ_symbol="SPY301108C00767000")
+        ok, why = rth.c4_check(t, rth.parse_ticket_rules(t), 761.0, at(10, 0))
+        self.assertFalse(ok); self.assertIn("strike", why)
+
+    def test_gates_hold_without_target(self):
+        g = self.gates({**CALL(), "underlying_target": None}, {}, quote(1.98, 2.02))
+        self.assertEqual(g["action"], "hold"); self.assertIn("C4", g["why"])
+
+
+class StackedFactors(_FW):
+    rules = Reprice.rules
+    gates = Reprice.gates
+
+    def test_vol_regime_factor(self):
+        f = rth.vol_regime_factor
+        self.assertEqual(f({"summary": CALM_VOL})[0], 1.0)
+        self.assertEqual(f({"summary": {**CALM_VOL, "vvix": 111}})[0], 0.5)
+        self.assertEqual(f({"summary": {**CALM_VOL, "vix9d": 18.1}})[0], 0.5)
+        self.assertEqual(f({"summary": {**CALM_VOL, "vix3m": 17.9}})[0], 0.5)
+        self.assertEqual(f({"summary": {"vix": 28.18, "vix9d": 32.66, "vix3m": 25.0, "vvix": 134.99}})[0], 0.25)  # Nov 5
+        self.assertIsNone(f({"summary": {"vix": 18}})[0])
+
+    def test_three_halves_drop_to_quarter(self):
+        q = quote(1.98, 2.02, delta=0.40, gamma=0.02)
+        walls = latest_walls(756, 761, f"{DAY_S}T09:50:00-0600", printed45=-7.0e9, vol={**CALM_VOL, "vvix": 115})
+        t = CALL(quantity=8, actual_dollar_risk=480.0)
+        g = self.gates(t, {"size_factor": 0.5, "size_factors": [0.5], "size_reasons": ["reclaim armed before 09:00 CT"]}, q, walls=walls)
+        self.assertEqual(g["action"], "submit", g["why"])
+        self.assertEqual(g["ticket"]["size_factor"], 0.25); self.assertEqual(g["ticket"]["quantity"], 2)
+        # two halves stay at 1/2 (smallest factor, not multiplied)
+        walls2 = latest_walls(756, 761, f"{DAY_S}T09:50:00-0600", printed45=-7.0e9)
+        g = self.gates(t, {"size_factor": 0.5, "size_factors": [0.5], "size_reasons": ["x"]}, q, walls=walls2)
+        self.assertEqual(g["ticket"]["quantity"], 4)
+
+    def test_quarter_regime(self):
+        q = quote(1.98, 2.02, delta=0.40, gamma=0.02)
+        walls = latest_walls(756, 761, f"{DAY_S}T09:50:00-0600", vol={"vix": 20, "vix9d": 22.5, "vix3m": 21, "vvix": 130})
+        g = self.gates(CALL(quantity=8, actual_dollar_risk=480.0), {}, q, walls=walls)
+        self.assertEqual(g["ticket"]["quantity"], 2)
+
+    def test_vol_inputs_missing_fails_closed(self):
+        g = self.gates(CALL(), {}, quote(1.98, 2.02, delta=0.40), walls=latest_walls(756, 761, f"{DAY_S}T09:50:00-0600", vol=None))
+        self.assertEqual(g["action"], "hold"); self.assertIn("R23", g["why"])
+
+    def test_factors_applied_at_staging_not_double_counted(self):
+        q = quote(1.98, 2.02, delta=0.40, gamma=0.02)
+        walls = latest_walls(756, 761, f"{DAY_S}T09:50:00-0600", printed45=-7.0e9)
+        g = self.gates(CALL(size_factors_applied=[0.5]), {}, q, walls=walls)  # card already halved for the 45D cap
+        self.assertEqual(g["ticket"]["quantity"], 4)
+        walls = latest_walls(756, 761, f"{DAY_S}T09:50:00-0600", printed45=-7.0e9, vol={**CALM_VOL, "vvix": 115})
+        g = self.gates(CALL(size_factors_applied=[0.5]), {"size_factor": 0.5, "size_factors": [0.5], "size_reasons": ["r"]}, q, walls=walls)
+        self.assertEqual(g["ticket"]["quantity"], 2)  # 3 halves => 1/4 of base = 1/2 of the already-halved card
+
+    def test_45d_grid_at_current_spot_only_tightens(self):
+        grid = [{"spot": 760.0, "net_gex": -4.0e9}, {"spot": 762.0, "net_gex": -6.0e9}]
+        v, info = rth.net_gex_45d_conservative(latest_walls(756, 761, printed45=-1.0e9, grid45=-2.0e9, grid=grid), 761.5)
+        self.assertAlmostEqual(v, -5.5e9); self.assertEqual(info["net_gex_45d_source"], "grid_at_current_spot")
+        v, _ = rth.net_gex_45d_conservative(latest_walls(756, 761, printed45=-7.0e9, grid=grid), 761.5)
+        self.assertEqual(v, -7.0e9)
+        v, _ = rth.net_gex_45d_conservative(latest_walls(756, 761, printed45=-1.0e9, grid=grid), 770.0)  # outside grid
+        self.assertEqual(v, -1.0e9)
+
+
+class VoidPlainWords(_FW):
+    rules = Reprice.rules
+    gates = Reprice.gates
+
+    def test_void_carries_plain_reason(self):
+        g = self.gates(CALL(), {}, quote(1.0, 1.2))
+        self.assertEqual(g["action"], "void"); self.assertEqual(g["plain"], "Voided: quote stale or spread too wide")
+
+
+class FirewallCheck5(unittest.TestCase):
+    """pod_engine.py size_ticket check 5 against LIVE 0DTE walls (CIO ruling 4)."""
+    def a(self, **kw):
+        import argparse
+        d = dict(instrument="option_call", direction="long", strategy_agent="ITT", min_rr=None, entry=2.0, stop=1.4,
+                 target1=3.8, target2=5.0, override_cap=False, risk_pct=0.25, drawdown_mode=False, underlying=None,
+                 symbol="SPY", time_stop="30m if <0.5R", equity=100000.0)
+        d.update(kw)
+        return argparse.Namespace(**d)
+
+    def m(self, put=756.0, call=761.0, spy=757.0, age_min=10):
+        ts = (datetime.now(rth.CT) - timedelta(minutes=age_min)).strftime("%Y-%m-%dT%H:%M:%S%z")
+        return {"ts": ts, "spy": spy, "spy_live": spy, "vix": 18.0, "put_wall_0dte": put, "call_wall_0dte": call}
+
+    def c5(self, t):
+        return next(c for c in t["firewall"] if c["id"] == 5)
+
+    def test_degenerate_equal_walls_now_fail(self):
+        t = pe.size_ticket(self.a(underlying=758.0), self.m(760.0, 760.0))
+        self.assertFalse(self.c5(t)["pass"]); self.assertIn("coincide", self.c5(t)["value"]["reason"])
+        self.assertEqual(t["verdict"], "BLOCKED")
+
+    def test_missing_walls_or_ref_fail_closed(self):
+        self.assertFalse(self.c5(pe.size_ticket(self.a(underlying=758.0), self.m(None, 761.0)))["pass"])
+        self.assertFalse(self.c5(pe.size_ticket(self.a(), {**self.m(), "spy": None, "spy_live": None}))["pass"])
+
+    def test_stale_or_untimed_walls_fail_closed(self):
+        c = self.c5(pe.size_ticket(self.a(underlying=757.0), self.m(age_min=120)))
+        self.assertFalse(c["pass"]); self.assertIn("WALL_STALE", c["value"]["reason"])
+        self.assertFalse(self.c5(pe.size_ticket(self.a(underlying=757.0), {**self.m(), "ts": None}))["pass"])
+
+    def test_live_walls_evaluated(self):
+        self.assertTrue(self.c5(pe.size_ticket(self.a(underlying=757.0), self.m()))["pass"])     # below 757.5
+        c = self.c5(pe.size_ticket(self.a(underlying=758.5), self.m()))
+        self.assertFalse(c["pass"]); self.assertEqual(c["value"]["no_mans_land"], [757.5, 759.5])
+        self.assertTrue(self.c5(pe.size_ticket(self.a(), self.m(spy=761.6)))["pass"])            # live spot used as ref
+
+
+class R24StopSign(unittest.TestCase):
+    """v1.3 corrected premium stop (mid - |Δ|·d + ½Γ·d² - 0.05) is never wider than the old form."""
+    def test_never_wider_calls_puts_both_signs_of_d(self):
+        for delta in (0.35, 0.42, 0.50, -0.35, -0.42, -0.50):          # calls and puts
+            for gamma in (0.0, 0.01, 0.05, 0.12, -0.05):               # incl. a bad negative print
+                for d in (-3.0, -1.7, -0.5, 0.0, 0.5, 1.7, 3.0):         # both signs of d
+                    for mid in (0.8, 1.2, 2.0, 4.0):
+                        new = rth.r24_premium_stop(mid, delta, gamma, d)
+                        old = rth.r24_premium_stop_old(mid, delta, gamma, d)
+                        self.assertGreaterEqual(new + 1e-12, old, (mid, delta, gamma, d))
+                        self.assertAlmostEqual(new, rth.r24_premium_stop(mid, delta, gamma, -d))
+                        exp = mid - abs(delta) * abs(d) + 0.5 * abs(gamma) * d * d - 0.05
+                        self.assertAlmostEqual(new, max(exp, old))
+
+    def test_corrected_formula_value(self):
+        # 0.45Δ, 0.08Γ, d = 1.2: 1.20 - 0.54 + 0.0576 - 0.05 = 0.6676 (old: 0.5524)
+        self.assertAlmostEqual(rth.r24_premium_stop(1.20, 0.45, 0.08, 1.2), 0.6676)
+        self.assertAlmostEqual(rth.r24_premium_stop_old(1.20, 0.45, 0.08, 1.2), 0.5524)
+        self.assertAlmostEqual(rth.r24_premium_stop(1.20, -0.45, 0.08, -1.2), 0.6676)  # put, same form
+
+    def test_reprice_put_uses_corrected_stop(self):
+        t = T.PUT() if hasattr(T, "PUT") else None
+        if t is None:
+            self.skipTest("no PUT fixture")
+        r = rth.parse_ticket_rules(t)
+        lvl = r["inv"]["level"]
+        spot = lvl - 1.0
+        q = {"bid": 1.18, "ask": 1.22, "t": (datetime.now(rth.CT) - timedelta(seconds=5)).astimezone(rth.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+             "delta": -0.42, "gamma": 0.06}
+        wk = {**t, "option_expiration": "2099-01-15", "occ_symbol": None}  # not 0DTE: no delta band
+        rp, why = rth.reprice_option_ticket(wk, rth.parse_ticket_rules(wk), q, spot, datetime.now(rth.CT))
+        self.assertEqual(why, "ok")
+        self.assertEqual(rp["stop"], round(1.20 - 0.42 * 1.0 + 0.5 * 0.06 * 1.0 - 0.05, 2))
 
 
 if __name__ == "__main__":

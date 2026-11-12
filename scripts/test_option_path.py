@@ -140,7 +140,20 @@ class _Base(unittest.TestCase):
     def tearDown(self):
         self.p.undo()
 
-    def manage(self, ticket, broker, now, bars=None, events=None):
+    def manage(self, ticket, broker, now, bars=None, events=None, opt_close="mark"):
+        # completed option 5m bars: by default one bar that just completed, closing at the position mark
+        def _ob(pe_, occ, now_, _b=broker, _c=opt_close):
+            if _c is None:
+                return []
+            c = _c
+            if c == "mark":
+                p = next((x for x in _b.positions if x.get("symbol") == occ), None)
+                if not p:
+                    return []
+                c = float(p["current_price"])
+            start = now_.replace(minute=now_.minute - now_.minute % 5, second=0, microsecond=0) - rth.timedelta(minutes=5)
+            return [{"_dt": start, "c": float(c)}]
+        self.p.set(rth, "fetch_option_completed_bars", _ob)
         self.p.set(rth, "blotter_rows", lambda: [dict(ticket)])
         self.p.set(rth, "rewrite_blotter_ticket", lambda tid, fn: self.rewrites.append(fn(dict(ticket))))
         self.p.set(rth, "_gov_close", lambda *a, **k: None)
@@ -271,8 +284,24 @@ class EntryRules(_Base):
         return or_bars(759.0, 760.4) + [bar(14, 20, 760.4, 761.2, 760.3, 761.0, 2000)]
 
     def test_call_fires_inside_window(self):
-        d = rth.decide_armed_ticket(CALL(), rth.compute_or(self.fire_bars(), at(14, 29), rvol=RV2), self.fire_bars(), at(14, 29))
+        # a non-0DTE call may still enter until 14:30 CT
+        wk = CALL(option_expiration="2030-11-15", occ_symbol="SPY301115C00760000")
+        d = rth.decide_armed_ticket(wk, rth.compute_or(self.fire_bars(), at(14, 29), rvol=RV2), self.fire_bars(), at(14, 29))
         self.assertEqual(d["action"], "fire", d["reason"])
+
+    def test_r24_no_new_0dte_after_1330(self):
+        d = rth.decide_armed_ticket(CALL(), rth.compute_or(self.fire_bars(), at(14, 29), rvol=RV2), self.fire_bars(), at(14, 29))
+        self.assertEqual(d["action"], "wait"); self.assertIn("13:30", d["reason"])
+        bars = or_bars(759.0, 760.4) + [bar(13, 20, 760.4, 761.2, 760.3, 761.0, 2000)]
+        d = rth.decide_armed_ticket(CALL(), rth.compute_or(bars, at(13, 29, 59), rvol=RV2), bars, at(13, 29, 59))
+        self.assertEqual(d["action"], "fire", d["reason"])
+        for t_ in (at(13, 30), at(13, 30, 30), at(14, 0)):
+            d = rth.decide_armed_ticket(CALL(), rth.compute_or(bars, t_, rvol=RV2), bars, t_)
+            self.assertEqual(d["action"], "wait", t_); self.assertIn("R24", d["reason"])
+        # an earlier ticket cut-off is never loosened
+        t = CALL(time_stop="45m if <0.5R progress; no new risk after 13:00 CT; flat 0DTE by 14:45 CT")
+        d = rth.decide_armed_ticket(t, rth.compute_or(bars, at(13, 25), rvol=RV2), bars, at(13, 25))
+        self.assertEqual(d["action"], "wait"); self.assertIn("13:00", d["reason"])
 
     def test_no_entry_after_1430_even_if_ticket_says_later(self):
         for t in (CALL(), CALL(time_stop="45m if <0.5R progress; no new risk after 14:50 CT; flat by 14:55 CT")):
@@ -326,6 +355,30 @@ class Management(_Base):
         self.assertIn("STOP_EXIT:TKT-TEST-OPTC", notes)
         self.assertIn("inv 759.80", doc["events"][-1]["detail"])
 
+    def test_scale_outs_use_completed_option_bars_only(self):
+        # live mark through T1/T2 but the last completed option bar closed below: no scale-out
+        b = Broker([pos(4, 5.10)])
+        notes, doc = self.manage(CALL(**FILLED), b, at(9, 50), opt_close=3.70)
+        self.assertEqual(b.posts(), []); self.assertEqual(doc["events"], [])
+        b = Broker([pos(4, 5.10)])
+        notes, doc = self.manage(CALL(**FILLED), b, at(9, 50), opt_close=None)  # no completed bar yet
+        self.assertEqual(b.posts(), [])
+        # completed close through T1 while the live mark has slipped back: still scales (limit >= T1)
+        b = Broker([pos(4, 3.60)])
+        notes, doc = self.manage(CALL(**FILLED), b, at(9, 50), opt_close=3.85)
+        self.assertIn("T1:TKT-TEST-OPTC", notes); self.assertGreaterEqual(float(b.posts()[-1]["limit_price"]), 3.80)
+
+    def test_protective_stop_acts_on_live_mark(self):
+        # completed bar still above the stop, live (forming) mark through it => stop exits now
+        b = Broker([pos(4, 1.35)])
+        notes, _ = self.manage(CALL(**FILLED), b, at(9, 52), opt_close=1.90)
+        self.assertIn("STOP_EXIT:TKT-TEST-OPTC", notes)
+        # underlying invalidation acts on the forming bar too
+        bars = or_bars(759.0, 761.0) + [bar(9, 50, 760.2, 760.3, 759.4, 759.50)]
+        b = Broker([pos(4, 2.10)])
+        notes, _ = self.manage(CALL(**FILLED), b, at(9, 52), bars=bars, opt_close=2.10)
+        self.assertIn("STOP_EXIT:TKT-TEST-OPTC", notes)
+
     def test_t1_scale_out_then_t2_remainder(self):
         b = Broker([pos(4, 3.85)])
         notes, doc = self.manage(CALL(**FILLED), b, at(9, 50))
@@ -347,12 +400,30 @@ class Management(_Base):
         self.assertEqual(b.posts(), [])
 
     def test_time_stop(self):
-        b = Broker([pos(4, 2.10)])  # +0.17R < 0.5R
-        notes, _ = self.manage(CALL(**FILLED), b, at(10, 15))  # 40m
+        # non-0DTE: the ticket's own 45m / 0.5R rule
+        wk = dict(option_expiration="2030-11-15", occ_symbol="SPY301115C00760000")
+        b = Broker([pos(4, 2.10, sym="SPY301115C00760000")])  # +0.17R < 0.5R
+        notes, _ = self.manage(CALL(**FILLED, **wk), b, at(10, 15))  # 40m
+        self.assertEqual(b.posts(), [])
+        b = Broker([pos(4, 2.10, sym="SPY301115C00760000")])
+        notes, _ = self.manage(CALL(**FILLED, **wk), b, at(10, 21))  # 46m >= 45m
+        self.assertIn("TIME_STOP_EXIT:TKT-TEST-OPTC", notes)
+
+    def test_r24_0dte_30m_time_stop_premium_r_on_completed_bar(self):
+        b = Broker([pos(4, 2.10)])
+        notes, _ = self.manage(CALL(**FILLED), b, at(10, 4))  # 29m
         self.assertEqual(b.posts(), [])
         b = Broker([pos(4, 2.10)])
-        notes, _ = self.manage(CALL(**FILLED), b, at(10, 21))  # 46m >= 45m
+        notes, doc = self.manage(CALL(**FILLED), b, at(10, 6))  # 31m, +0.17R premium < 0.5R
+        self.assertIn("TIME_STOP_EXIT:TKT-TEST-OPTC", notes); self.assertIn("R24", doc["events"][-1]["detail"])
+        # R from the COMPLETED bar close: live mark spikes to +0.67R, completed close +0.17R => exits
+        b = Broker([pos(4, 2.40)])
+        notes, _ = self.manage(CALL(**FILLED), b, at(10, 6), opt_close=2.10)
         self.assertIn("TIME_STOP_EXIT:TKT-TEST-OPTC", notes)
+        # and the reverse: completed close +0.67R, live mark dipped => kept
+        b = Broker([pos(4, 2.10)])
+        notes, _ = self.manage(CALL(**FILLED), b, at(10, 6), opt_close=2.40)
+        self.assertEqual(b.posts(), [])
 
     def test_time_stop_spared_when_progress(self):
         b = Broker([pos(4, 2.40)])  # +0.67R

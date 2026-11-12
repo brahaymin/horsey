@@ -99,7 +99,8 @@ def market():
     s = d.get("summary", {})
     vts = d.get("vol_term_structure", {})
     return {
-        "ts": s.get("timestamp_ct"), "spy": s.get("spy_regular_close") or s.get("spy_price"),
+        "ts": s.get("timestamp_ct") or d.get("timestamp_ct"), "spy": s.get("spy_regular_close") or s.get("spy_price"),
+        "spy_live": s.get("spy_price"),
         "sma200": s.get("spy_sma_200"), "gex45": s.get("net_gex_45d_dollars"), "gex0": s.get("net_gex_0dte_dollars"),
         "vix": s.get("vix"), "vix9d": s.get("vix9d"), "vix3m": s.get("vix3m"),
         "call_wall_0dte": s.get("call_wall_0dte"), "put_wall_0dte": s.get("put_wall_0dte"),
@@ -122,6 +123,58 @@ def classify_regime(m):
 
 
 # ---------------------------------------------------------------- sizer
+WALLS_MAX_AGE_MIN = 90.0
+
+
+def _parse_ct(ts):
+    for fmt in ("%Y-%m-%dT%H:%M:%S%z",):
+        try:
+            return datetime.strptime(str(ts), fmt)
+        except Exception:
+            pass
+    try:
+        d = datetime.fromisoformat(str(ts))
+        return d if d.tzinfo else d.replace(tzinfo=CT)
+    except Exception:
+        return None
+
+
+def wall_check_5(ref, m, now=None):
+    """Firewall check 5 against the LIVE 0DTE walls (Nov 12 2026 fix, fail closed).
+    Before: missing walls, equal walls (e.g. 760/760) or a missing reference price silently
+    PASSED. Now each of those fails, as does a wall snapshot older than 90 minutes or from
+    another session (when the market dict carries its snapshot time, as market() always does).
+    Pass only when the reference price sits outside the middle 40% between distinct walls."""
+    def num(v):
+        try:
+            v = float(v)
+            return v if v == v else None
+        except Exception:
+            return None
+    put, call, r = num(m.get("put_wall_0dte")), num(m.get("call_wall_0dte")), num(ref)
+    val = {"ref": r, "put_wall": put, "call_wall": call, "snapshot_ct": m.get("ts")}
+    if put is None or call is None:
+        return {"pass": False, "value": {**val, "reason": "0DTE walls missing (fail closed)"}}
+    if r is None:
+        return {"pass": False, "value": {**val, "reason": "no reference price (fail closed)"}}
+    if "ts" in m:
+        t = _parse_ct(m.get("ts"))
+        if t is None:
+            return {"pass": False, "value": {**val, "reason": "wall snapshot has no timestamp (fail closed)"}}
+        now = now or datetime.now(CT)
+        age = (now - t).total_seconds() / 60.0
+        val["age_min"] = round(age, 1)
+        if t.astimezone(CT).date() != now.astimezone(CT).date() or age > WALLS_MAX_AGE_MIN or age < -5:
+            return {"pass": False, "value": {**val, "reason": f"WALL_STALE: snapshot {age:.0f} min old (limit {WALLS_MAX_AGE_MIN:g}, same session; fail closed)"}}
+    lo, hi = min(put, call), max(put, call)
+    if hi - lo < 1e-9:
+        return {"pass": False, "value": {**val, "reason": "0DTE walls coincide; check cannot run (fail closed)"}}
+    w = hi - lo
+    nml = (lo + 0.3 * w) < r < (hi - 0.3 * w)
+    return {"pass": not nml, "value": {**val, "reason": ("mid-range no-man's-land" if nml else "outside no-man's-land"),
+                                       "no_mans_land": [round(lo + 0.3 * w, 2), round(hi - 0.3 * w, 2)]}}
+
+
 def size_ticket(a, m=None):
     m = m or market()
     errors, checks = [], []
@@ -168,15 +221,11 @@ def size_ticket(a, m=None):
     checks.append({"id": 4, "name": "Vol-regime / drawdown size throttle applied", "pass": True,
                    "value": ("halved: " + ", ".join(throttle)) if throttle else "not required"})
 
-    ref = a.underlying if a.underlying is not None else (entry if instr == "stock" and a.symbol.upper() == "SPY" else m.get("spy"))
-    lo, hi = m.get("put_wall_0dte"), m.get("call_wall_0dte")
-    nml = False
-    if ref is not None and lo and hi and hi > lo:
-        lo, hi = min(lo, hi), max(lo, hi)
-        w = hi - lo
-        nml = (lo + 0.3 * w) < ref < (hi - 0.3 * w)
-    checks.append({"id": 5, "name": "Not mid-range no-man's-land vs 0DTE walls", "pass": not nml,
-                   "value": {"ref": ref, "put_wall": lo, "call_wall": hi}})
+    ref = a.underlying if a.underlying is not None else (
+        entry if instr == "stock" and a.symbol.upper() == "SPY" else (m.get("spy_live") or m.get("spy")))
+    c5 = wall_check_5(ref, m)
+    checks.append({"id": 5, "name": "Not mid-range no-man's-land vs live 0DTE walls", "pass": c5["pass"],
+                   "value": c5["value"]})
 
     ts_ok = bool(a.time_stop) or instr == "stock"
     checks.append({"id": 6, "name": "Time-stop defined (mandatory for options)", "pass": ts_ok, "value": a.time_stop})

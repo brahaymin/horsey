@@ -40,6 +40,18 @@ TICKETS = [
      "symbol": "SPY", "quantity": 125, "entry": 749.5, "stop": 751.0, "target1": 745.0, "target2": 741.0,
      "actual_dollar_risk": 187.5, "risk_pct_effective": 0.375, "firewall": FW, "session_target": "2030-11-08",
      "time_stop": "45m if <0.5R progress; no new risk after 14:30 CT"},
+    {"ticket_id": "TKT-SYN-VOID", "status": "voided_paper", "instrument": "option_call", "direction": "long",
+     "symbol": "SPY", "occ_symbol": "SPY301108C00762000", "option_expiration": "2030-11-08", "strike": 762.0,
+     "quantity": 2, "entry": 2.13, "stop": 1.18, "target1": 7.1, "target2": 7.1, "session_target": "2030-11-08",
+     "risk_pct_effective": 0.19, "firewall": FW, "time_stop": "45m if <0.5R progress",
+     "void_reason": "Stale premium: spread 6.1% of mid is above 5.0%; ticket voided (no chase)",
+     "void_reason_plain": "Voided: quote stale or spread too wide"},
+    {"ticket_id": "TKT-SYN-SKIP", "status": "skipped_paper", "instrument": "option_put", "direction": "long",
+     "symbol": "SPY", "occ_symbol": "SPY301108P00755000", "option_expiration": "2030-11-08", "strike": 755.0,
+     "quantity": 1, "entry": 1.50, "stop": 1.00, "target1": 3.0, "target2": 4.0, "session_target": "2030-11-08",
+     "risk_pct_effective": 0.05, "firewall": FW, "time_stop": "30m if <0.5R progress",
+     "skip_reason": "Size x0.5 (45D net GEX < -$5B) rounds 1 to 0; ticket skipped",
+     "skip_reason_plain": "Skipped: reduced size rounds to zero contracts"},
 ]
 
 
@@ -94,7 +106,7 @@ def main() -> int:
             page.goto(f"http://127.0.0.1:{port}/index.html#pod", wait_until="networkidle")
             page.wait_for_selector("#podBlot tr[data-ticket='TKT-SYN-CALL']", timeout=20000)
             page.wait_for_timeout(1500)
-            rows = {tid: page.inner_text(f"#podBlot tr[data-ticket='{tid}']") for tid in ("TKT-SYN-CALL", "TKT-SYN-PUT", "TKT-SYN-STK")}
+            rows = {tid: page.inner_text(f"#podBlot tr[data-ticket='{tid}']") for tid in ("TKT-SYN-CALL", "TKT-SYN-PUT", "TKT-SYN-STK", "TKT-SYN-VOID", "TKT-SYN-SKIP")}
             blot = page.inner_text("#podBlot")
             prev = page.inner_text("#alpacaPreview") if page.query_selector("#alpacaPreview") else ""
             body = page.inner_text("body")
@@ -114,6 +126,9 @@ def main() -> int:
             "no raw OCC in visible page": not OCC_RE.search(body),
             "no snake_case in ticket table/preview": not SNAKE_RE.search(blot + "\n" + prev),
             "no paths in ticket table/preview": not PATH_RE.search(blot + "\n" + prev),
+            "voided shown in plain words": "Voided: quote stale or spread too wide" in rows["TKT-SYN-VOID"]
+                                            and "%" not in rows["TKT-SYN-VOID"].split("Voided")[-1] and "voided_paper" not in blot,
+            "skipped shown in plain words": "Skipped: reduced size rounds to zero contracts" in rows["TKT-SYN-SKIP"],
             "0 console errors": not errors,
         }
         results = {"checks": checks, "errors": errors[:10], "rows": rows, "preview": prev}

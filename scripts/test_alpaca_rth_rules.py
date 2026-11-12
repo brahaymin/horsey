@@ -173,13 +173,45 @@ class WallFade(unittest.TestCase):
         self.assertEqual(r["time_stop"]["minutes"], 45)
         self.assertTrue(any("alternate" in w for w in r["warnings"]))
 
+    def fade(self, rvol_min=0.8, **ut):
+        t = T_FADE()
+        t["underlying_trigger"] = {**t["underlying_trigger"], "rvol_min": rvol_min,
+                                   "primary": t["underlying_trigger"]["primary"].replace("RVOL >= 1.2x", f"RVOL >= {rvol_min}x"), **ut}
+        return t
+
+    def go(self, t, bars, now, tod, bar_rvol):
+        oi = rth.compute_or(bars, now, rvol={"tod_rvol": tod, "bar_rvol": bar_rvol, "source": "test"})
+        return rth.decide_armed_ticket(t, oi, bars, now)
+
     def test_fire_and_wait(self):
         base = or_bars(751.0, 754.0)
-        d, _ = run(T_FADE(), base + [bar(9, 20, 754.6, 755.20, 754.2, 754.30, 1300)], at(9, 25))
-        self.assertEqual(d["action"], "fire", d["reason"])
-        d, _ = run(T_FADE(), base + [bar(9, 20, 754.6, 755.20, 754.6, 754.80, 1300)], at(9, 25))  # no close back below
+        rej = base + [bar(9, 20, 754.6, 755.20, 754.2, 754.30, 900)]
+        d = self.go(self.fade(), rej, at(9, 25), 0.9, 0.9)
+        self.assertEqual(d["action"], "fire", d["reason"]); self.assertIn("R16", d["reason"])
+        d = self.go(self.fade(), base + [bar(9, 20, 754.6, 755.20, 754.6, 754.80, 900)], at(9, 25), 0.9, 0.9)  # no close back below
         self.assertEqual(d["action"], "wait")
-        d, _ = run(T_FADE(), base + [bar(9, 20, 754.0, 754.90, 753.9, 754.10, 1300)], at(9, 25))  # never tested wall
+        d = self.go(self.fade(), base + [bar(9, 20, 754.0, 754.90, 753.9, 754.10, 900)], at(9, 25), 0.9, 0.9)  # never tested wall
+        self.assertEqual(d["action"], "wait")
+
+    def test_r16_and_ticket_rule_stricter_wins(self):
+        rej = or_bars(751.0, 754.0) + [bar(9, 20, 754.6, 755.20, 754.2, 754.30, 900)]
+        # R16: RVOL >= 1.2x on the break disarms the fade even though the ticket's own minimum is met
+        d = self.go(self.fade(), rej, at(9, 25), 1.2, 0.9)
+        self.assertEqual(d["action"], "wait"); self.assertIn("disarmed", d["reason"])
+        # ticket's own minimum still applies below 1.2x
+        d = self.go(self.fade(rvol_min=1.0), rej, at(9, 25), 0.95, 0.9)
+        self.assertEqual(d["action"], "wait"); self.assertIn("ticket minimum", d["reason"])
+        # a ticket asking RVOL >= 1.2x can never fire a fade (both rules together)
+        for tod in (1.19, 1.2, 1.6):
+            d = self.go(T_FADE(), rej, at(9, 25), tod, 0.9)
+            self.assertEqual(d["action"], "wait", (tod, d["reason"]))
+        # a ticket cap tighter than R16 wins
+        d = self.go(self.fade(rvol_max=1.0), rej, at(9, 25), 1.05, 0.9)
+        self.assertEqual(d["action"], "wait"); self.assertIn("≥ 1", d["reason"])
+        # R16 rejection bar <= 1.0x its slot; missing bar RVOL fails closed
+        d = self.go(self.fade(), rej, at(9, 25), 0.9, 1.15)
+        self.assertEqual(d["action"], "wait"); self.assertIn("rejection bar", d["reason"])
+        d = self.go(self.fade(), rej, at(9, 25), 0.9, None)
         self.assertEqual(d["action"], "wait")
 
 
