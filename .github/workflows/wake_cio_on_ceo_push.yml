@@ -1,30 +1,69 @@
 name: Wake CIO on CEO Decision Push
+# Relays a CEO decision push (dashboard 1-Click Direct Sync writes pod/ceo_decisions/ via the
+# Contents API with the CEO's token, which DOES trigger push workflows) to the CIO's Grok Bot
+# webhook routine ("Dashboard Push Instant Wake").
+# The webhook URL and key live ONLY in GitHub Actions secrets:
+#   HORSEY_CIO_WEBHOOK_URL, HORSEY_CIO_WEBHOOK_KEY
+# They are never written to the repo, index.html or the vault. GitHub masks them in logs.
 on:
   push:
     branches: [main]
     paths:
       - 'pod/ceo_decisions/**'
+  workflow_dispatch:
+    inputs:
+      test_ping:
+        description: "Send a harmless connectivity ping (NOT a CEO decision) instead of the latest decisions file"
+        type: boolean
+        default: true
+concurrency:
+  group: wake-cio
+  cancel-in-progress: false
+permissions:
+  contents: read
 jobs:
   wake-cio:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout latest decisions
         uses: actions/checkout@v4
-      - name: Relay CEO decision push to CIO webhook
+      - name: Relay to the CIO webhook
         env:
           HORSEY_CIO_WEBHOOK_URL: ${{ secrets.HORSEY_CIO_WEBHOOK_URL }}
           HORSEY_CIO_WEBHOOK_KEY: ${{ secrets.HORSEY_CIO_WEBHOOK_KEY }}
+          TEST_PING: ${{ github.event_name == 'workflow_dispatch' && inputs.test_ping }}
         run: |
-          if [ -z "$HORSEY_CIO_WEBHOOK_URL" ] || [ -z "$HORSEY_CIO_WEBHOOK_KEY" ]; then
-            echo "Notice: HORSEY_CIO_WEBHOOK_URL or HORSEY_CIO_WEBHOOK_KEY secret not set; skipping instant webhook relay."
-            exit 0
+          set -euo pipefail
+          missing=""
+          [ -n "${HORSEY_CIO_WEBHOOK_URL:-}" ] || missing="$missing HORSEY_CIO_WEBHOOK_URL"
+          [ -n "${HORSEY_CIO_WEBHOOK_KEY:-}" ] || missing="$missing HORSEY_CIO_WEBHOOK_KEY"
+          if [ -n "$missing" ]; then
+            # Fail loudly: a silent green skip is why this relay never fired.
+            echo "::error title=CIO wake not sent::Repository secret(s) missing:${missing}. Add them under Settings > Secrets and variables > Actions."
+            echo "### CIO wake NOT sent: missing secret(s):${missing}" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
-          if [ ! -f "pod/ceo_decisions/latest_decisions.json" ]; then
-            echo "Notice: pod/ceo_decisions/latest_decisions.json not found; skipping."
-            exit 0
+          if [ "${TEST_PING}" = "true" ]; then
+            printf '%s' "{\"event\":\"test_ping\",\"is_ceo_decision\":false,\"source\":\"github-actions\",\"run_id\":\"${GITHUB_RUN_ID}\",\"note\":\"Connectivity test only. Not a CEO decision; take no action.\"}" > /tmp/payload.json
+          else
+            if [ ! -f pod/ceo_decisions/latest_decisions.json ]; then
+              echo "::error title=CIO wake not sent::pod/ceo_decisions/latest_decisions.json not found"
+              exit 1
+            fi
+            cp pod/ceo_decisions/latest_decisions.json /tmp/payload.json
           fi
-          curl -fsS -X POST "$HORSEY_CIO_WEBHOOK_URL" \
+          code=$(curl -sS -o /tmp/resp.txt -w '%{http_code}' --max-time 30 --retry 2 --retry-delay 3 --retry-all-errors \
+            -X POST "$HORSEY_CIO_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $HORSEY_CIO_WEBHOOK_KEY" \
             -H "X-Webhook-Secret: $HORSEY_CIO_WEBHOOK_KEY" \
-            --data-binary @pod/ceo_decisions/latest_decisions.json
+            -H "X-Horsey-Event: ${GITHUB_EVENT_NAME}" \
+            -H "X-Horsey-Commit: ${GITHUB_SHA}" \
+            --data-binary @/tmp/payload.json) || code="000"
+          echo "Webhook HTTP status: $code"
+          echo "### CIO wake: HTTP $code (${GITHUB_EVENT_NAME}, test_ping=${TEST_PING})" >> "$GITHUB_STEP_SUMMARY"
+          case "$code" in
+            2??) echo "CIO wake delivered." ;;
+            *) echo "::error title=CIO wake failed::Webhook returned HTTP $code"; exit 1 ;;
+          esac
