@@ -877,10 +877,67 @@ class R10Kill(_FW):
         # zero-gamma above every close => no kill
         self.assertEqual(self.go(self.short(leg_type="continuation"), bars, at(9, 10, 1), 752.5)["action"], "fire")
 
-    def test_mirror_for_longs(self):
-        bars = or_bars(756.0, 758.9) + [bar(9, 0, 758.9, 759.0, 757.8, 758.0), bar(9, 5, 758.0, 759.5, 757.85, 759.3)]
-        d = self.go(BREAKOUT(leg_type="continuation"), bars, at(9, 10, 1), 758.5)
-        self.assertEqual(d["action"], "invalidate"); self.assertIn("below", d["reason"])
+    def lbars(self, *closes):
+        out = or_bars(756.0, 758.9)
+        for k, c in enumerate(closes):
+            out.append(bar(9, 5 * k, c - 0.1, c + 0.2, c - 0.3, c))
+        return out
+
+    def test_long_closes_below_zg_before_trigger_do_not_cancel(self):
+        # every close below zero-gamma 760.0, trigger (759.3 > 759.0) fires: R10 not armed, entry allowed
+        b = self.lbars(758.0, 759.3)
+        d = self.go(BREAKOUT(leg_type="continuation"), b, at(9, 10, 1), 760.0)
+        self.assertEqual(d["action"], "fire", d["reason"])
+        k, why = rth.r10_continuation_kill(BREAKOUT(leg_type="continuation"), d["rules"], b, at(9, 10, 1), 760.0)
+        self.assertEqual(k, "ok"); self.assertIn("not armed", why)
+
+    def test_long_arms_after_trigger_and_close_above_then_cancels_on_close_back_below(self):
+        t = BREAKOUT(leg_type="continuation", r10_trigger_bar_ct="09:05")
+        r = rth.parse_ticket_rules(t)
+        k = lambda *c: rth.r10_continuation_kill(t, r, self.lbars(*c), at(9, 5 * len(c) + 1), 759.2)
+        # trigger bar 09:05 closes 759.3 above zg 759.2 => armed; 09:10 closes 759.1 back below => cancel
+        self.assertEqual(k(758.0, 759.3)[0], "ok")
+        res, why = k(758.0, 759.3, 759.1)
+        self.assertEqual(res, "cancel"); self.assertIn("09:10", why); self.assertIn("after the leg fired (09:05)", why)
+        # the 09:00 close below zg (before the trigger) never cancels on its own
+        self.assertEqual(k(758.0, 759.3, 759.6)[0], "ok")
+
+    def test_long_trigger_below_zg_arms_only_on_later_close_above(self):
+        t = BREAKOUT(leg_type="continuation", r10_trigger_bar_ct="09:05")
+        r = rth.parse_ticket_rules(t)
+        k = lambda *c: rth.r10_continuation_kill(t, r, self.lbars(*c), at(9, 5 * len(c) + 1), 759.9)
+        self.assertEqual(k(758.0, 759.3, 759.0)[0], "ok")                 # fired below zg: not armed, no cancel
+        self.assertEqual(k(758.0, 759.3, 759.0, 760.1)[0], "ok")          # 09:15 close above => armed
+        self.assertEqual(k(758.0, 759.3, 759.0, 760.1, 759.7)[0], "cancel")  # 09:20 back below => cancel
+        # r17_blocked_bar_ct also marks the trigger
+        t2 = BREAKOUT(leg_type="continuation", r17_blocked_bar_ct="09:05")
+        self.assertEqual(rth.r10_continuation_kill(t2, r, self.lbars(758.0, 759.3, 759.0, 760.1, 759.7), at(9, 26), 759.9)[0], "cancel")
+
+    def test_long_unknown_zero_gamma_still_holds(self):
+        d = self.go(BREAKOUT(leg_type="continuation"), self.lbars(758.0, 759.3), at(9, 10, 1), None)
+        self.assertEqual(d["action"], "wait"); self.assertIn("fail closed", d["reason"])
+
+    def test_short_side_unchanged_stricter(self):
+        # short legs: any close above zero-gamma since 08:30 cancels, even before the trigger (superset of the ruling)
+        bars = or_bars(750.2, 752.0) + [bar(9, 0, 751.0, 751.8, 750.9, 751.6)]
+        k, _ = rth.r10_continuation_kill(self.short(leg_type="continuation"), rth.parse_ticket_rules(self.short()), bars, at(9, 5, 1), 751.5)
+        self.assertEqual(k, "cancel")
+
+    def test_tick_long_leg_blocked_then_cancelled(self):
+        t = BREAKOUT(session_target=DAY_S, leg_type="continuation")
+        bars = self.lbars(758.0, 759.3)
+        doc = {"events": []}
+        rewrites, submits = _tick_env(self, t, bars, at(9, 10, 30),
+                                      {"summary": {"zero_gamma_0dte": 759.2, "timestamp_ct": f"{DAY_S}T09:05:00-0600"}},
+                                      {"load_events": lambda: doc,
+                                       "arm_time_gates": lambda pe_, tk, *a, **k: {"action": "hold", "ticket": tk, "why": "walls"}})
+        rth.alpaca_rth_tick(_TPE)
+        self.assertEqual(t["r10_trigger_bar_ct"], "09:05"); self.assertEqual(submits, [])
+        bars.append(bar(9, 10, 759.3, 759.4, 758.9, 759.1))  # completed close back below zero-gamma
+        self.p.set(rth, "_now_ct", lambda: at(9, 15, 30))
+        res = rth.alpaca_rth_tick(_TPE)
+        self.assertTrue(any(str(a) == "invalidated:R10:TKT-TEST-BRK" for a in res["actions"]), res["actions"])
+        self.assertEqual(rewrites[-1]["status"], "invalidated_paper"); self.assertIn("R10", rewrites[-1]["invalidation_reason"])
 
     def test_unknown_zero_gamma_holds_and_ticket_fallback(self):
         bars = or_bars(750.2, 752.0) + [bar(9, 5, 751.6, 751.7, 749.4, 749.6)]

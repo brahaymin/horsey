@@ -1494,6 +1494,32 @@ def r10_continuation_kill(ticket: dict, rules: dict, bars_5m: List[dict], now: d
     if zg is None:
         return "hold", "R10/R9: 0DTE zero-gamma unknown (no fresh snapshot, no zero_gamma_0dte); continuation entry held (fail closed)"
     short = rules.get("direction") == "short"
+    if not short:
+        # CIO ruling (Nov 12, 16:17 CT) for long continuation legs: the cancel ARMS only after the leg's
+        # trigger has fired (r10_trigger_bar_ct, else r17_blocked_bar_ct) AND a completed close at/after
+        # that bar is above zero-gamma; from then on any completed close back below cancels the leg.
+        # Closes below zero-gamma before that do not cancel.
+        trig = ticket.get("r10_trigger_bar_ct") or ticket.get("r17_blocked_bar_ct")
+        if not trig:
+            return "ok", f"R10 (long): not armed; the leg's trigger has not fired (zero-gamma {zg:.2f})"
+        armed_at = None
+        for b in completed_bars(bars_5m, now):
+            ct = b["_dt"].strftime("%H:%M")
+            if ct < trig:
+                continue
+            if armed_at is None:
+                if b["c"] > zg:
+                    armed_at = ct
+                continue
+            if b["c"] < zg:
+                return "cancel", (f"R10 continuation kill: {ct} 5m close {b['c']:.2f} back below 0DTE zero-gamma "
+                                  f"{zg:.2f} after the leg fired ({trig}) and closed above it ({armed_at}); "
+                                  f"long-continuation leg cancelled (playbook switches to range/fade)")
+        return "ok", (f"R10 (long): armed at {armed_at}, no close back below {zg:.2f}" if armed_at else
+                      f"R10 (long): trigger fired at {trig}, no completed close above zero-gamma {zg:.2f} yet (not armed)")
+    # Short legs keep the original, stricter reading (unchanged): ANY completed close above
+    # zero-gamma since 08:30 cancels, before or after the trigger. This is a superset of the
+    # ruling's cancels; matching the ruling exactly would loosen the short side.
     for b in completed_bars(bars_5m, now):
         if _hm(b["_dt"]) < (8, 30):
             continue
@@ -2712,6 +2738,12 @@ def alpaca_rth_tick(pe, force_sim: bool = False, push_if_changed: bool = False,
         def _r17_block(trigger_ct, why, _t=ticket, _tid=tid, _rules=rules, _sym=_sym0):
             """R17: a gate blocked a met trigger -> log blocked_move once and persist the re-arm state."""
             nonlocal changed
+            if (trigger_ct and _tag(_t, "leg_type") == "continuation" and not _t.get("r10_trigger_bar_ct")
+                    and not force_sim):
+                # R10 (long legs): remember when the leg's trigger fired, so the zero-gamma cancel can arm
+                rewrite_blotter_ticket(_tid, lambda t, _c=trigger_ct: {**t, "r10_trigger_bar_ct": _c})
+                _t["r10_trigger_bar_ct"] = trigger_ct
+                changed = True
             f = r17_record_block(_t, _rules, bars, now, trigger_ct)
             if not f:
                 return
