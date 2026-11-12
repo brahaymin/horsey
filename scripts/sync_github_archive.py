@@ -439,9 +439,12 @@ def run_morning_charts(day, run_tag):
     if not os.path.exists(charts_py) or run_tag == "post-close":
         return None
     out_dir = os.path.join(REPO_DIR, "pod", "gamma_charts")
-    have = all(os.path.exists(os.path.join(out_dir, f"{day}_{k}.png")) for k in ("outlook", "range"))
-    if run_tag != "pre-open" and have:
-        return None
+    pngs = [os.path.join(out_dir, f"{day}_{k}.png") for k in ("outlook", "range")]
+    have = all(os.path.exists(p) for p in pngs)
+    card = os.path.join(REPO_DIR, "pod", "premarket_cards", f"{day}.json")
+    card_newer = have and os.path.exists(card) and os.path.getmtime(card) > min(os.path.getmtime(p) for p in pngs)
+    if run_tag != "pre-open" and have and not card_newer:
+        return None  # RTH runs redraw only when today's charts are missing or the CIO card changed after them
     try:
         py = CHARTS_PYTHON if os.path.exists(CHARTS_PYTHON) else sys.executable
         r = subprocess.run([py, charts_py, "--date", day], cwd=REPO_DIR, capture_output=True, text=True, timeout=180)

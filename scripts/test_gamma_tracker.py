@@ -244,6 +244,26 @@ class TrackerHistory(unittest.TestCase):
         rows = [{"timestamp_ct": "2026-11-12T08:23:00-0600", "net_gex_0dte_dollars": 1, "net_gex_45d_dollars": 1}]
         self.assertEqual(sync.tracker_day_notes(rows, "2026-11-12"), "no net GEX sign change across archived runs")
 
+    def test_chart_hook_fail_safe_and_card_refresh(self):
+        calls = []
+        orig = sync.subprocess.run
+        sync.subprocess.run = lambda *a, **k: calls.append(a[0]) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        try:
+            os.makedirs(os.path.join(self.td.name, "scripts")); Path(self.td.name, "scripts", "gamma_charts.py").write_text("")
+            self.assertIsNone(sync.run_morning_charts("2026-11-12", "post-close")); self.assertEqual(calls, [])
+            sync.run_morning_charts("2026-11-12", "rth-hourly"); self.assertEqual(len(calls), 1)  # missing -> draw
+            out = Path(self.td.name, "pod", "gamma_charts"); out.mkdir(parents=True)
+            for k in ("outlook", "range"):
+                (out / f"2026-11-12_{k}.png").write_bytes(b"x"); os.utime(out / f"2026-11-12_{k}.png", (1000, 1000))
+            sync.run_morning_charts("2026-11-12", "rth-hourly"); self.assertEqual(len(calls), 1)  # present -> skip
+            cards = Path(self.td.name, "pod", "premarket_cards"); cards.mkdir(parents=True); (cards / "2026-11-12.json").write_text("{}")
+            sync.run_morning_charts("2026-11-12", "rth-hourly"); self.assertEqual(len(calls), 2)  # newer card -> redraw
+            sync.run_morning_charts("2026-11-12", "pre-open"); self.assertEqual(len(calls), 3)
+            sync.subprocess.run = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+            self.assertIsNone(sync.run_morning_charts("2026-11-12", "pre-open"))  # never raises
+        finally:
+            sync.subprocess.run = orig
+
     def test_tracker_never_in_publish_allowlist(self):
         for p in ("history/daily_tracker.jsonl", "history/daily_tracker.csv", "pod/gamma_charts/latest_images.json"):
             self.assertFalse(sync.in_publish_allowlist(p), p)
