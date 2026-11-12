@@ -116,6 +116,7 @@ CT=ZoneInfo('America/Chicago')
 HVL_LABEL='model estimate (cumulative strike net-GEX zero-crossing), not vendor HVL'
 VP_LABEL='approximation from 1-minute bars, not a tick profile'
 FUT_LABEL='Yahoo delayed ~10 min'
+ON_WINDOW_LABEL='overnight high/low over the Globex session, 5:00 PM CT reopen to 8:20 CT; gap and retracement vs the prior 3:00 PM CT cash close'
 PREV_GEX_NOTE='expiry roll and OI refresh make prior-session and current net GEX not strictly comparable'
 PC_NOTE='Cboe delayed chain; volume is session-to-date, open interest is from the prior session'
 # NYSE full-day closures (early closes still count as sessions). Unknown year -> None.
@@ -210,8 +211,9 @@ def prev_net_gex(history_path,tracker_date):
     return dict(out,status='ok',net_gex_45d=best.get('net_gex_45d_dollars'),net_gex_0dte=best.get('net_gex_0dte_dollars'),source_timestamp_ct=best.get('timestamp_ct'),source_session=best.get('session_date'))
 
 def overnight_futures(intra,tracker_date,cutoff_ct=dt.time(8,20),now=None):
-    """ref = price at the prior 3:00 PM CT cash close; low/time since then; price at 8:20 CT."""
-    out={'label':FUT_LABEL,'ref':None,'ref_time_ct':None,'high':None,'high_time_ct':None,'low':None,'low_time_ct':None,'p0820':None,'p0820_time_ct':None,'gap_dollars':None,'gap_pct':None,'pct_retraced':None,'classification':None}
+    """ref = price at the prior 3:00 PM CT cash close (gap and retracement are measured against it);
+    overnight high/low (and the classification low) over the Globex session: 5:00 PM CT reopen -> 8:20 CT."""
+    out={'label':FUT_LABEL,'window':ON_WINDOW_LABEL,'window_start_ct':None,'ref':None,'ref_time_ct':None,'high':None,'high_time_ct':None,'low':None,'low_time_ct':None,'p0820':None,'p0820_time_ct':None,'gap_dollars':None,'gap_pct':None,'pct_retraced':None,'classification':None}
     if intra is None or getattr(intra,'empty',True):return dict(out,status='unavailable_no_bars')
     idx=_ny_index(intra);df=intra.copy();df.index=idx;df=df.dropna(subset=['Close'])
     # prior cash close: last bar starting before 16:00 ET on the latest earlier date with such a bar
@@ -223,10 +225,11 @@ def overnight_futures(intra,tracker_date,cutoff_ct=dt.time(8,20),now=None):
     ref=float(ref_bar.Close)
     cutoff=dt.datetime.combine(tracker_date,cutoff_ct,CT).astimezone(NY)
     end=min(cutoff,now.astimezone(NY)) if now else cutoff
-    win=df[(df.index>ref_t)&(df.index<end)]
-    if win.empty:return dict(out,ref=ref,ref_time_ct=ref_t.astimezone(CT).isoformat(),status='unavailable_no_overnight_bars')
+    start=dt.datetime.combine(pdate,dt.time(17,0),CT).astimezone(NY)  # Globex reopen (weekends: next bar is Sunday 17:00 CT)
+    win=df[(df.index>=start)&(df.index<end)]
+    if win.empty:return dict(out,ref=ref,ref_time_ct=(ref_t+pd.Timedelta(minutes=1)).astimezone(CT).isoformat(),window_start_ct=start.astimezone(CT).isoformat(),status='unavailable_no_overnight_bars')
     li=win.Low.astype(float).idxmin();low=float(win.Low.loc[li]);hi_i=win.High.astype(float).idxmax();last=win.iloc[-1];p=float(last.Close)
-    o=dict(out,ref=ref,ref_time_ct=(ref_t+pd.Timedelta(minutes=1)).astimezone(CT).isoformat(),low=low,low_time_ct=li.astimezone(CT).isoformat(),high=float(win.High.loc[hi_i]),high_time_ct=hi_i.astimezone(CT).isoformat(),p0820=p,
+    o=dict(out,ref=ref,ref_time_ct=(ref_t+pd.Timedelta(minutes=1)).astimezone(CT).isoformat(),window_start_ct=win.index[0].astimezone(CT).isoformat(),low=low,low_time_ct=li.astimezone(CT).isoformat(),high=float(win.High.loc[hi_i]),high_time_ct=hi_i.astimezone(CT).isoformat(),p0820=p,
            p0820_time_ct=(win.index[-1]+pd.Timedelta(minutes=1)).astimezone(CT).isoformat(),gap_dollars=p-ref,gap_pct=(p/ref-1)*100,
            status='ok' if end>=cutoff else 'partial_before_0820')
     if low<ref:o['pct_retraced']=(p-low)/(ref-low)
@@ -281,7 +284,7 @@ RVOL_SESSIONS=20      # N prior RTH sessions for slot averages
 SPIKE_CAP_MULT=8.0    # each 5m bar volume capped at 8x that slot's median over the N prior sessions
 TOD_RVOL_LABEL='time-of-day RVOL: cumulative RTH volume through the last completed 5m bar / average cumulative volume through the same slot over the prior 20 sessions; spike prints capped at 8x slot median'
 GRID_LABEL='net GEX repriced across spot (frozen IV Black-Scholes, prior-session OI); model estimate, not observed dealer inventory'
-ES_SPY_LABEL='estimate: ES level x (SPY close / ES price) at the prior 3:00 PM CT cash close; basis drift overnight not modelled'
+ES_SPY_LABEL='estimate: ES level x (SPY close / ES price) at the prior 3:00 PM CT cash close; basis drift overnight not modelled; high/low window 5:00 PM CT Globex reopen to 8:20 CT'
 
 def spy_5m_feed(df5,now,n=RVOL_SESSIONS,cap_mult=SPIKE_CAP_MULT):
     out={'label':TOD_RVOL_LABEL,'n_sessions_target':n,'spike_cap':f'{cap_mult:g}x slot median of the prior sessions','tod_rvol':None,'bar_rvol':None,
@@ -338,7 +341,7 @@ def es_overnight_spy_terms(es,spy_hist):
     d=dt.datetime.fromisoformat(es['ref_time_ct']).date();h=spy_hist[[x==d for x in spy_hist.index.date]]
     if h.empty:return dict(out,status='unavailable_no_spy_close_for_reference_date')
     sc=float(h.Close.iloc[-1]);ratio=sc/es['ref'];cv=lambda v:v*ratio if v is not None else None
-    return dict(out,status='estimate',ratio_spy_per_es=ratio,spy_reference_close=sc,es_high=es.get('high'),es_low=es.get('low'),
+    return dict(out,status='estimate',window=ON_WINDOW_LABEL,ratio_spy_per_es=ratio,spy_reference_close=sc,es_high=es.get('high'),es_low=es.get('low'),
                 high_time_ct=es.get('high_time_ct'),low_time_ct=es.get('low_time_ct'),spy_equiv_high=cv(es.get('high')),spy_equiv_low=cv(es.get('low')),spy_equiv_p0820=cv(es.get('p0820')))
 
 def tracker_md_lines(g,fmt):
@@ -353,7 +356,7 @@ def tracker_md_lines(g,fmt):
     L+=[f"- HVL: {HVL_LABEL}. P/C: {PC_NOTE}.",
         f"- Prior-session volume profile ({vp.get('session')}): POC {fmt(vp.get('poc'),2)}, VAH {fmt(vp.get('vah'),2)}, VAL {fmt(vp.get('val'),2)} ({VP_LABEL})",
         f"- Prior post-close net GEX: 45D {fmt(pv.get('net_gex_45d'),0)}, 0DTE {fmt(pv.get('net_gex_0dte'),0)} ({pv.get('source_timestamp_ct')}; {PREV_GEX_NOTE})",
-        '','| Futures | Ref (3:00 PM CT) | Overnight low | Low time | 8:20 CT | Gap $ | Gap % | Retraced | Class |','|---|---:|---:|---|---:|---:|---:|---:|---|']
+        f"- Overnight window: {ON_WINDOW_LABEL}",'','| Futures | Ref (3:00 PM CT) | Overnight low | Low time | 8:20 CT | Gap $ | Gap % | Retraced | Class |','|---|---:|---:|---|---:|---:|---:|---:|---|']
     for s,o in (g.get('overnight_futures') or {}).items():
         L.append(f"| {s} | {fmt(o.get('ref'),2)} | {fmt(o.get('low'),2)} | {o.get('low_time_ct') or 'NA'} | {fmt(o.get('p0820'),2)} | {fmt(o.get('gap_dollars'),2)} | {fmt(o.get('gap_pct'),3)} | {fmt(o.get('pct_retraced'),3)} | {o.get('classification') or 'NA'} |")
     L+=[f"- Futures: {FUT_LABEL}. Regime rule: {g.get('regime_rule')}; 45D regime: {g.get('regime_45d')}"]

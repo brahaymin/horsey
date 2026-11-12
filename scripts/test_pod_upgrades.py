@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tempdir integration tests for CEO upgrades 1–4. Production pod/ untouched."""
+"""Tempdir integration tests for CEO upgrades 1–4 on a SYNTHETIC fixture pod. Production pod/ untouched."""
 from __future__ import annotations
 import json, os, shutil, sys, tempfile, unittest
 from pathlib import Path
@@ -7,18 +7,54 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+ITT = "ee33b632-6c42-4d43-bf17-665bc939db17"
+CIO = "7ad52fe7-3d09-4438-bfa9-552a13aef8b6"
+FIXTURE_TICKET = {
+    "ticket_id": "TKT-ITT-2026-11-06-A", "status": "staged", "symbol": "SPY", "instrument": "option_put",
+    "direction": "long", "quantity": 2, "entry": 1.85, "stop": 1.25, "target1": 3.00, "target2": 3.65,
+    "risk_per_unit": 0.6, "multiplier": 100, "actual_dollar_risk": 120.0, "risk_pct_effective": 0.24,
+    "occ_symbol": "SPY301108P00733000", "strategy_agent": ITT, "regime_tags": ["short_gamma_backwardation"],
+    "verdict": "APPROVED_FOR_STAGING", "errors": [], "created_ct": "2026-11-06T08:40:00-0600",
+}
+
+
+def write_fixture_pod(td: Path):
+    pod = td / "pod"
+    for d in ("ledger", "risk", "signals", "reviews", "track_record", "ceo_decisions", "cio_briefings"):
+        (pod / d).mkdir(parents=True, exist_ok=True)
+    w = lambda rel, obj: (pod / rel).write_text(json.dumps(obj, indent=1))
+    w("roster.json", {"agents": [{"id": ITT, "name": "Intraday Tape & Gamma Tactician"}, {"id": CIO, "name": "CIO & Risk Gatekeeper"}]})
+    w("scorecard.json", {"schema_version": 1, "agents": {ITT: {"name": "Intraday Tape & Gamma Tactician",
+        "regime_weights": {"short_gamma_backwardation": 0.30, "positive_gamma_contango": 0.30, "below_200sma": 0.30}}}, "attribution_log": []})
+    w("risk/limits.json", {"schema_version": 1, "equity_reference": 50000.0, "alpaca_paper_equity": 100000.0,
+        "limits": {"max_risk_per_ticket_pct": 0.5, "default_tactical_shot_pct": 0.25, "max_total_open_risk_pct": 1.5,
+                   "max_theme_concentration_pct": 0.75, "max_daily_realized_loss_pct": 1.0, "max_weekly_realized_loss_pct": 2.5},
+        "current_usage": {}, "kill_switch": {"breached": False, "status": "ARMED_CLEAR", "breached_limits": [],
+                                             "breached_since_ct": None, "breach_memo_path": None, "active_ceo_override": None},
+        "override_audit_log": []})
+    w("paper_account_state.json", {"status": "connected", "equity": 100000.0, "cash": 100000.0, "positions": [], "orders": []})
+    w("signals/latest_pod_state.json", {"agents": {}})
+    w("ceo_questions.json", {"questions": []}); w("ceo_decisions/latest_decisions.json", {})
+    w("memos_index.json", {"memos": []})
+    (pod / "ledger" / "paper_blotter.jsonl").write_text(json.dumps(FIXTURE_TICKET) + "\n")
+    (pod / "track_record" / "trades.jsonl").write_text("")
+    for rel in ("reviews/schema.json", "reviews/TEMPLATE.md", "track_record/rules_registry.json"):
+        src = ROOT / "pod" / rel
+        if src.exists():
+            shutil.copy2(src, pod / rel)
+    if not (pod / "reviews" / "schema.json").exists():
+        w("reviews/schema.json", {"required": ["review_id", "ticket_id", "status"]})
+    (td / "latest.json").write_text(json.dumps({"summary": {"spy_price": 733.0, "vix": 28.18, "spy_sma_200": 730.15, "net_gex_45d": -2.0e9}}))
+
+
 class TestPodUpgrades(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.td = Path(self.tmp.name)
-        # copy pod skeleton
-        shutil.copytree(ROOT / "pod", self.td / "pod")
-        # minimal latest.json
-        latest = ROOT / "latest.json"
-        if latest.exists():
-            shutil.copy2(latest, self.td / "latest.json")
-        else:
-            (self.td / "latest.json").write_text(json.dumps({"summary": {"spy_price": 733.0, "vix": 28.18, "spy_sma_200": 730.15}}))
+        # SYNTHETIC fixture pod (Nov 12 2026): never copies live pod/ state, so results do not
+        # drift as real tickets close. Only the static review schema/template and rule registry
+        # (configuration, not state) are reused when present.
+        write_fixture_pod(self.td)
         (self.td / "scripts").mkdir()
         shutil.copy2(ROOT / "scripts" / "_pod_governance.py", self.td / "scripts" / "_pod_governance.py")
         os.environ["HORSEY_ROOT"] = str(self.td)

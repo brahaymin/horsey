@@ -134,6 +134,7 @@ class PrevGexAndFutures(unittest.TestCase):
     def _fut(self, low, p0820):
         d0, d1 = dt.date(2026, 11, 11), dt.date(2026, 11, 12)
         rows = [(t(d0, 15, 58), 100, 100, 100, 100, 1), (t(d0, 15, 59), 100, 100, 100, 100.0, 1),
+                (t(d0, 16, 30), 101, 120, 90, 100, 1), (t(d0, 17, 59), 101, 121, 91, 100, 1),  # post-cash 15:30/16:59 CT: outside window
                 (t(d1, 3, 0), max(low, 99), max(low, 99), max(low, 99), max(low, 99), 1), (t(d1, 6, 10), low, low, low, low, 1), (t(d1, 9, 19), p0820, p0820, p0820, p0820, 1),
                 (t(d1, 9, 25), 1, 1, 1, 1, 1)]  # after 8:20 CT: ignored
         return mon.overnight_futures(bars(rows), d1)
@@ -146,6 +147,16 @@ class PrevGexAndFutures(unittest.TestCase):
         self.assertAlmostEqual(o["gap_dollars"], -0.5); self.assertAlmostEqual(o["gap_pct"], -0.5)
         self.assertAlmostEqual(o["pct_retraced"], 0.75); self.assertEqual(o["classification"], "dipped_recovering")
         self.assertEqual(o["label"], "Yahoo delayed ~10 min")
+        self.assertTrue(o["window_start_ct"].startswith("2026-11-12T02:00"))  # first bar at/after the 17:00 CT reopen
+        self.assertEqual(o["high"], max(99.5, 99.0)); self.assertIn("5:00 PM CT reopen", o["window"])
+
+    def test_window_starts_at_globex_reopen_weekend(self):
+        fri, mon_ = dt.date(2026, 11, 6), dt.date(2026, 11, 9)
+        rows = [(t(fri, 15, 59), 100, 100, 100, 100.0, 1), (t(fri, 16, 40), 100, 100, 95, 100, 1),  # Fri 15:40 CT post-cash
+                (t(dt.date(2026, 11, 8), 18, 0), 100, 101, 99, 100, 1), (t(mon_, 9, 19), 99.6, 99.6, 99.6, 99.6, 1)]
+        o = mon.overnight_futures(bars(rows), mon_)
+        self.assertEqual(o["low"], 99); self.assertEqual(o["high"], 101); self.assertTrue(o["window_start_ct"].startswith("2026-11-08T17:00"))
+        self.assertAlmostEqual(o["pct_retraced"], 0.6); self.assertEqual(o["classification"], "dipped_recovering")
 
     def test_classification_rules(self):
         self.assertEqual(self._fut(98.0, 98.5)["classification"], "dipped_not_recovering")
