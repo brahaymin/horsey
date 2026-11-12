@@ -412,6 +412,12 @@ def upsert_daily_tracker(snap, run_tag, ts_rows, hist_dir, stamp_ct):
             if k not in ("date", "close", "notes"):
                 cur[k] = new.get(k)
         cur["pre_open_written_ct"] = stamp_ct
+        # Confirm the prior session's close with the completed (final) close now that it is settled.
+        spy = snap.get("spy") or {}
+        ps = spy.get("completed_session") or spy.get("session")
+        pc = spy.get("regular_close", spy.get("close"))
+        if ps and ps != day and ps in rows and isinstance(pc, (int, float)):
+            rows[ps] = _tracker_round(dict(rows[ps], close=pc, close_confirmed_ct=stamp_ct))
     else:
         spy = snap.get("spy") or {}
         if spy.get("session") == day and spy.get("status") == "ok":
@@ -603,6 +609,7 @@ def _main_unlocked():
         "gex_scopes": compact_scopes,
         "verified_headlines": snap.get("verified_headlines", []),
         "gamma_tracker": snap.get("gamma_tracker"),
+        "intraday_feed": snap.get("intraday_feed"),  # RTH watcher reads 5m/tod RVOL, GEX-by-spot, ES overnight in SPY terms
     }
     compact_json.update(build_enrichment(snap, spy, assets, futs, cboe_cur))
     compact_json["md_rel_path"] = f"snapshots/{yyyy}/{mm}/{date_str}/{hhmm}-ct-{run_tag}.md"
