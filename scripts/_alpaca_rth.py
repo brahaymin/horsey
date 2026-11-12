@@ -1332,6 +1332,7 @@ def evaluate_entry(ticket: dict, or_info: dict, bars_5m: List[dict], now: dateti
             ok_rt = latest["l"] <= b and latest["c"] > a
         if not ok_rt:
             return False, f"waiting: CIO gate retest {a:.2f}-{b:.2f} and reject (h {latest['h']:.2f} c {latest['c']:.2f})", meta
+    meta["price_ok"] = True  # the price trigger is met on this completed bar; anything below is a gate (R17)
     fg = rules.get("fill_guard")
     if fg:
         bad = (latest["c"] < fg["level"]) if fg["side"] == "below" else (latest["c"] > fg["level"])
@@ -1353,6 +1354,7 @@ def evaluate_entry(ticket: dict, or_info: dict, bars_5m: List[dict], now: dateti
                     tail = closes[-n2:] if len(closes) >= n2 else []
                     ok2 = bool(tail) and all((c >= lvl - 1e-9) if rules["side"] == "above" else (c <= lvl + 1e-9) for c in tail)
                 if not ok2:
+                    meta["hold2_wait"] = True
                     return False, f"waiting: half-size RVOL tier needs a {n2}-bar hold ({tier['why']})", meta
             factors.append(0.5); reasons.append("RVOL half tier")
         rv_txt = tier["why"]
@@ -1389,6 +1391,177 @@ def evaluate_entry(ticket: dict, or_info: dict, bars_5m: List[dict], now: dateti
     return True, f"{mode}: {cond}; {rv_txt}" + (" + CIO retest/reject" if rt else "") + sz, meta
 
 
+# ---------------------------------------------------------------- framework v1.3 R6 / R10 / R17 (Nov 12 PM)
+R6_ROWS = ("weak", "neutral", "strong", "flat")
+R17_NO_REARM_AFTER = (13, 30)
+
+
+def _tag(ticket: dict, key: str) -> Optional[str]:
+    ut = ticket.get("underlying_trigger") if isinstance(ticket.get("underlying_trigger"), dict) else {}
+    v = ticket.get(key, ut.get(key))
+    return str(v).strip().lower().replace("-", "_").replace(" ", "_") if v not in (None, "") else None
+
+
+def r6_classify(bars_5m: List[dict], now: datetime, prior_close: Optional[float]) -> Dict[str, Any]:
+    """R6 08:45 cash re-test from COMPLETED bars: cash = 08:40 bar close; OR15 = 08:30-08:40 bars.
+    weak: cash < OR15 mid; strong: cash >= prior close; neutral_high: cash >= (OR15 mid + prior close)/2;
+    else neutral. Ambiguous (prior close below the OR15 mid with cash between them) => None."""
+    done = completed_bars(bars_5m, now)
+    o15 = [b for b in done if (8, 30) <= _hm(b["_dt"]) < OR15_END]
+    if len(o15) < 3 or _hm(now) < OR15_END:
+        return {"cls": None, "why": "OR15 (08:30-08:40 completed bars) not complete"}
+    if prior_close is None:
+        return {"cls": None, "why": "no prior close on the ticket (prior_close)"}
+    hi, lo = max(b["h"] for b in o15), min(b["l"] for b in o15)
+    mid = (hi + lo) / 2.0
+    cash = sorted(o15, key=lambda b: b["_dt"])[-1]["c"]
+    nh = (mid + prior_close) / 2.0
+    info = {"cash_0845": round(cash, 2), "or15_mid": round(mid, 2), "prior_close": prior_close, "neutral_high_line": round(nh, 2)}
+    if cash < mid and cash >= prior_close:
+        return {**info, "cls": None, "why": "ambiguous: prior close is below the OR15 mid and cash sits between them"}
+    if cash < mid:
+        cls = "weak"
+    elif cash >= prior_close:
+        cls = "strong"
+    elif cash >= nh:
+        cls = "neutral_high"
+    else:
+        cls = "neutral"
+    return {**info, "cls": cls, "why": "ok"}
+
+
+def r6_gate(ticket: dict, bars_5m: List[dict], now: datetime) -> Tuple[bool, str]:
+    """R6 (v1.3): the 08:45 re-test is a gate. Applies ONLY to tickets tagged scenario_row
+    weak|neutral|strong (flat and untagged tickets are unchanged). Cash wins over 8:23: the
+    selected row is weak / neutral / strong from the 08:45 class; neutral_high selects the
+    Strong row only when the ticket says the 8:23 case was strong (case_0823), otherwise the
+    Neutral row; with neutral_high and no case_0823 the row cannot be decided => hold.
+    The ticket arms only when its row is the selected row. Missing inputs => hold (fail closed)."""
+    row = _tag(ticket, "scenario_row")
+    if row is None or row == "flat":
+        return True, "R6 not applicable (no scenario_row tag)" if row is None else "R6 not applied to the Flat row"
+    if row not in R6_ROWS:
+        return False, f"R6: unknown scenario_row '{row}'; entry held (fail closed)"
+    ut = ticket.get("underlying_trigger") if isinstance(ticket.get("underlying_trigger"), dict) else {}
+    pc = _num(ticket.get("prior_close", ut.get("prior_close")))
+    c = r6_classify(bars_5m, now, pc)
+    if c["cls"] is None:
+        return False, f"R6 08:45 gate not computable ({c['why']}); entry held (fail closed)"
+    case = _tag(ticket, "case_0823")
+    if c["cls"] == "neutral_high":
+        if case is None:
+            return False, (f"R6: cash {c['cash_0845']} is neutral-high but case_0823 is missing, so Strong vs Neutral "
+                           f"row cannot be decided; entry held")
+        selected = "strong" if case == "strong" else "neutral"
+    else:
+        selected = c["cls"]
+    txt = (f"08:45 cash {c['cash_0845']} vs OR15 mid {c['or15_mid']}, neutral-high {c['neutral_high_line']}, "
+           f"prior close {c['prior_close']} → {c['cls']} → {selected.title()} row")
+    if selected != row:
+        return False, f"R6 gate: {txt}; this {row.title()}-row ticket is not live"
+    return True, f"R6 gate passed: {txt}"
+
+
+def live_zero_gamma_0dte(latest_doc: Optional[dict], now: datetime, max_age_min: float = 90.0) -> Optional[float]:
+    """0DTE zero-gamma from the monitor snapshot, same session and <= 90 min old; else None."""
+    s = ((latest_doc or {}).get("summary") or {})
+    zg = _num(s.get("zero_gamma_0dte"))
+    ts = s.get("timestamp_ct") or (latest_doc or {}).get("timestamp_ct")
+    if zg is None or not ts:
+        return None
+    try:
+        try:
+            t = datetime.strptime(str(ts), "%Y-%m-%dT%H:%M:%S%z").astimezone(CT)
+        except Exception:
+            t = datetime.fromisoformat(str(ts)).astimezone(CT)
+    except Exception:
+        return None
+    age = (now - t).total_seconds() / 60.0
+    if t.date() != now.astimezone(CT).date() or age > max_age_min or age < -5:
+        return None
+    return zg
+
+
+def r10_continuation_kill(ticket: dict, rules: dict, bars_5m: List[dict], now: datetime,
+                          live_zg: Optional[float]) -> Tuple[str, str]:
+    """R10: a completed 5m close above the 0DTE zero-gamma cancels a short-continuation leg
+    (mirror: a close below cancels a long-continuation leg). Applies ONLY to tickets tagged
+    leg_type=continuation. Zero-gamma = the live snapshot value, else the ticket's
+    zero_gamma_0dte. Returns ("ok"|"cancel"|"hold", why); "hold" when no zero-gamma is known."""
+    if _tag(ticket, "leg_type") != "continuation":
+        return "ok", "R10 not applicable"
+    zg = live_zg if live_zg is not None else _num(ticket.get("zero_gamma_0dte"))
+    if zg is None:
+        return "hold", "R10/R9: 0DTE zero-gamma unknown (no fresh snapshot, no zero_gamma_0dte); continuation entry held (fail closed)"
+    short = rules.get("direction") == "short"
+    for b in completed_bars(bars_5m, now):
+        if _hm(b["_dt"]) < (8, 30):
+            continue
+        if (short and b["c"] > zg) or (not short and b["c"] < zg):
+            return "cancel", (f"R10 continuation kill: {b['_dt']:%H:%M} 5m close {b['c']:.2f} "
+                              f"{'above' if short else 'below'} 0DTE zero-gamma {zg:.2f}; "
+                              f"{'short' if short else 'long'}-continuation leg cancelled (playbook switches to range/fade)")
+    return "ok", f"R10: no 5m close {'above' if short else 'below'} 0DTE zero-gamma {zg:.2f}"
+
+
+def _r17_level(rules: dict) -> Optional[Tuple[float, str]]:
+    m = rules.get("mode")
+    if m == "acceptance":
+        return float(rules["level"]), rules["side"]
+    if m == "reclaim":
+        return float(rules["trigger_level"]), rules["side"]
+    if m == "wall_fade":
+        return float(rules["confirm_level"]), rules["confirm_side"]
+    return None
+
+
+def r17_check(ticket: dict, rules: dict, bars_5m: List[dict], now: datetime) -> Tuple[bool, str]:
+    """R17: after a gate blocked a move, no chasing. One re-arm per scenario: a retest that holds
+    (a later completed bar trades back to the level and closes beyond it again) or a fresh break
+    after price returns inside (a later completed close back inside the level). No re-arm after
+    13:30 CT. Tickets never blocked are unaffected. Applies to acceptance / reclaim / wall-fade."""
+    blk = ticket.get("r17_blocked_bar_ct")
+    if not blk:
+        return True, "R17: no blocked move"
+    if ticket.get("r17_exhausted"):
+        return False, "R17: blocked again after its one re-arm; scenario done (no chasing)"
+    lv = _r17_level(rules)
+    if lv is None:
+        return True, "R17 not applicable to this trigger type"
+    lvl, side = lv
+    above = side == "above"
+    rearm = None
+    for b in completed_bars(bars_5m, now):
+        if b["_dt"].strftime("%H:%M") <= blk:
+            continue
+        inside = (b["c"] <= lvl) if above else (b["c"] >= lvl)
+        retest = (not inside) and rules.get("mode") != "wall_fade" and ((b["l"] <= lvl) if above else (b["h"] >= lvl))
+        if inside or retest:
+            rearm = (b["_dt"].strftime("%H:%M"), "price returned inside" if inside else "retest held")
+            break
+    if rearm is None:
+        return False, f"R17: move blocked at {blk}; waiting for a retest that holds or a fresh break (no chasing)"
+    if _hm(now) >= R17_NO_REARM_AFTER:
+        return False, "R17: no re-arm after 13:30 CT"
+    return True, f"R17: re-armed at {rearm[0]} ({rearm[1]})"
+
+
+def r17_record_block(ticket: dict, rules: dict, bars_5m: List[dict], now: datetime, trigger_bar_ct: Optional[str]) -> Optional[dict]:
+    """Fields to persist when a gate blocks a met trigger (None if nothing changes)."""
+    if _r17_level(rules) is None or not trigger_bar_ct:
+        return None
+    blk = ticket.get("r17_blocked_bar_ct")
+    if not blk:
+        return {"r17_blocked_bar_ct": trigger_bar_ct, "r17_blocked_count": 1}
+    if ticket.get("r17_exhausted") or trigger_bar_ct <= blk:
+        return None
+    ok, _ = r17_check(ticket, rules, bars_5m, now)
+    if ok:  # blocked again after the one re-arm
+        return {"r17_exhausted": True, "r17_blocked_count": int(ticket.get("r17_blocked_count") or 1) + 1,
+                "r17_second_block_bar_ct": trigger_bar_ct}
+    return None
+
+
 def decide_armed_ticket(ticket: dict, or_info: dict, bars_5m: List[dict], now: datetime) -> Dict[str, Any]:
     """Pure decision for one armed ticket (no I/O): unparsed | invalidate | fire | wait."""
     rules = parse_ticket_rules(ticket)
@@ -1397,7 +1570,20 @@ def decide_armed_ticket(ticket: dict, or_info: dict, bars_5m: List[dict], now: d
     inv, why = pre_trigger_invalidated(or_info, bars_5m, now, rules)
     if inv:
         return {"action": "invalidate", "reason": why, "rules": rules}
+    k10, w10 = r10_continuation_kill(ticket, rules, bars_5m, now, or_info.get("zero_gamma_0dte_live"))
+    if k10 == "cancel":
+        return {"action": "invalidate", "reason": w10, "rules": rules, "rule": "R10"}
+    if k10 == "hold":
+        return {"action": "wait", "reason": w10, "meta": {}, "rules": rules}
+    ok6, w6 = r6_gate(ticket, bars_5m, now)
+    if not ok6:
+        return {"action": "wait", "reason": w6, "meta": {}, "rules": rules}
     fired, reason, meta = evaluate_entry(ticket, or_info, bars_5m, now, rules)
+    if not fired and meta.get("price_ok") and not meta.get("hold2_wait"):
+        meta = {**meta, "gate_block": True}
+    ok17, w17 = r17_check(ticket, rules, bars_5m, now)
+    if fired and not ok17:
+        return {"action": "wait", "reason": w17, "meta": {**meta, "r17_wait": True}, "rules": rules}
     return {"action": "fire" if fired else "wait", "reason": reason, "meta": meta, "rules": rules}
 
 
@@ -2447,6 +2633,7 @@ def alpaca_rth_tick(pe, force_sim: bool = False, push_if_changed: bool = False,
     bars = completed_bars(all_bars, now)  # triggers: completed 5m bars only
     rv = live_rvol(now, bars, latest_doc) if bars else {"tod_rvol": None, "bar_rvol": None, "why": "no completed bars"}
     or_info = compute_or(bars, now, rvol=rv)
+    or_info["zero_gamma_0dte_live"] = live_zero_gamma_0dte(latest_doc, now, float(cfg.get("live_walls_max_age_min") or 90))
     fed_blocked, fed_why, fed_warn = fed_speaker_blackout(now)
     if fed_warn:
         result.setdefault("warnings", []).append(fed_warn)
@@ -2520,12 +2707,49 @@ def alpaca_rth_tick(pe, force_sim: bool = False, push_if_changed: bool = False,
             result["actions"].append(f"sim_eval:{tid}:{fired}:{reason}")
             continue
 
+        _sym0 = ((ticket.get("alpaca_paper_payload") or {}).get("order") or {}).get("symbol") or ticket.get("symbol") or ""
+
+        def _r17_block(trigger_ct, why, _t=ticket, _tid=tid, _rules=rules, _sym=_sym0):
+            """R17: a gate blocked a met trigger -> log blocked_move once and persist the re-arm state."""
+            nonlocal changed
+            f = r17_record_block(_t, _rules, bars, now, trigger_ct)
+            if not f:
+                return
+            if force_sim:
+                append_event(events_doc, "BLOCKED_MOVE", _tid, f"[SIM] Move blocked by a gate: {_tid}", why, "warn", _sym)
+            else:
+                rewrite_blotter_ticket(_tid, lambda t, _f=f: {**t, **_f})
+                _t.update(f)
+                more = ("; the one re-arm is used, scenario done" if f.get("r17_exhausted") else
+                        "; one re-arm allowed: a retest that holds or a fresh break after price returns inside, not after 13:30 CT")
+                append_event(events_doc, "BLOCKED_MOVE", _tid, f"Move blocked by a gate, no chasing: {_tid}", why + more, "warn", _sym,
+                             extra={"reason_code": "blocked_move", "trigger_bar_ct": trigger_ct, **f})
+            changed = True
+            result["actions"].append(f"blocked_move:{tid}:{trigger_ct}")
+
+        # R10 continuation kill / R6 08:45 gate / R17 re-arm limits (framework v1.3)
+        d = decide_armed_ticket(ticket, or_info, bars, now)
+        if d["action"] == "invalidate" and d.get("rule") == "R10":
+            _w = d["reason"]
+            rewrite_blotter_ticket(tid, lambda t, _w=_w: {**t, "status": "invalidated_paper", "invalidation_reason": _w,
+                                                          "invalidated_ct": _iso_ct()})
+            append_event(events_doc, "INVALIDATED", tid, f"Continuation leg cancelled (R10): {tid}", _w, "neg", _sym0)
+            changed = True
+            result["actions"].append(f"invalidated:R10:{tid}")
+            continue
+
         if fed_blocked:
+            if (d.get("meta") or {}).get("price_ok") and not (d.get("meta") or {}).get("r17_wait"):
+                _r17_block((d.get("meta") or {}).get("trigger_bar_ct"), f"Fed-speaker blackout: {fed_why}")
             result["actions"].append(f"blackout:{tid}:{fed_why}")
             continue
 
-        fired, reason, meta = evaluate_entry(ticket, or_info, bars, now, rules)
+        meta = d.get("meta") or {}
+        reason = d["reason"]
+        fired = d["action"] == "fire"
         if not fired:
+            if meta.get("gate_block"):
+                _r17_block(meta.get("trigger_bar_ct"), reason)
             result["actions"].append(f"wait:{tid}:{reason}")
             continue
 
@@ -2533,6 +2757,8 @@ def alpaca_rth_tick(pe, force_sim: bool = False, push_if_changed: bool = False,
         try:
             g = arm_time_gates(pe, ticket, rules, meta, bars, now, events_doc, force_sim, latest_doc, cfg)
             sym = ((ticket.get("alpaca_paper_payload") or {}).get("order") or {}).get("symbol") or ticket.get("symbol") or ""
+            if g["action"] == "hold":
+                _r17_block(meta.get("trigger_bar_ct"), g["why"])
             if g["action"] == "hold" and g.get("kind") == "WALL_STALE":
                 age = g.get("wall_age_min")
                 snap = (now - timedelta(minutes=float(age))).strftime("%Y-%m-%dT%H:%M") if age is not None else "unknown"

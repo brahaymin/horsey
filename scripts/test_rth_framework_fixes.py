@@ -314,7 +314,13 @@ class FedBlackout(_FW):
             self.p.set(rth, k, v)
         res = rth.alpaca_rth_tick(_TPE)
         self.assertEqual(submits, []); self.assertTrue(any(str(a).startswith("blackout:") for a in res["actions"]))
+        self.assertEqual(t.get("r17_blocked_bar_ct"), "09:40")  # R17: the blackout blocked a met trigger
+        # after the blackout the same (stale) break is not chased
         self.p.set(rth, "_now_ct", lambda: at(10, 1))
+        res = rth.alpaca_rth_tick(_TPE)
+        self.assertEqual(submits, []); self.assertTrue(any("R17" in str(a) for a in res["actions"]))
+        # price returns inside, then a fresh break after the blackout => the one re-arm fires
+        bars += [bar(9, 45, 749.4, 750.6, 749.3, 750.4), bar(9, 50, 750.4, 750.5, 749.9, 750.1), bar(9, 55, 750.1, 750.2, 749.1, 749.3)]
         rth.alpaca_rth_tick(_TPE)
         self.assertEqual(submits, [1])
 
@@ -801,6 +807,164 @@ class C3Dedup(_FW):
         self.assertEqual(g["action"], "skip"); self.assertIn("rounds 1 to 0", g["why"])
         g = self.gates(CALL(quantity=1, actual_dollar_risk=60.0), dict(self.RECL), self.q(), walls=self.walls())
         self.assertEqual(g["action"], "skip")
+
+
+# ------------------------------------------------------------------ v1.3 R6 / R10 / R17 (Nov 12 evening)
+def r6_bars(cash):
+    # OR15 high 757.86 / low 753.70 => mid 755.78 (Thu Nov 12 replay); 08:40 close = cash
+    return [bar(8, 30, 754.0, 755.0, 753.70, 754.2), bar(8, 35, 754.2, 757.86, 754.1, 756.0), bar(8, 40, 756.0, max(757.8, cash), 755.9, cash)]
+
+
+class R6Gate(_FW):
+    def tk(self, **kw):
+        return RECLAIM(prior_close=759.81, **kw)
+
+    def test_classify_replay_values(self):
+        c = rth.r6_classify(r6_bars(757.4), at(8, 45), 759.81)
+        self.assertEqual((c["cls"], c["or15_mid"]), ("neutral", 755.78)); self.assertAlmostEqual(c["neutral_high_line"], 757.8, places=1)
+        self.assertEqual(rth.r6_classify(r6_bars(757.85), at(8, 45), 759.81)["cls"], "neutral_high")
+        self.assertEqual(rth.r6_classify(r6_bars(759.81), at(8, 45), 759.81)["cls"], "strong")
+        self.assertEqual(rth.r6_classify(r6_bars(755.0), at(8, 45), 759.81)["cls"], "weak")
+        self.assertIsNone(rth.r6_classify(r6_bars(757.4), at(8, 44, 59), 759.81)["cls"])      # before 08:45
+        self.assertIsNone(rth.r6_classify(r6_bars(757.4)[:2], at(8, 45), 759.81)["cls"])      # OR15 incomplete
+        self.assertIsNone(rth.r6_classify(r6_bars(755.0), at(8, 45), 754.0)["cls"])           # ambiguous
+
+    def test_untagged_and_flat_unchanged(self):
+        self.assertTrue(rth.r6_gate(RECLAIM(), r6_bars(757.4), at(8, 45))[0])
+        self.assertTrue(rth.r6_gate(RECLAIM(scenario_row="Flat"), r6_bars(757.4), at(8, 45))[0])
+
+    def test_row_selection_cash_wins(self):
+        g = lambda row, cash, **kw: rth.r6_gate(self.tk(scenario_row=row, **kw), r6_bars(cash), at(8, 45))[0]
+        self.assertTrue(g("neutral", 757.4)); self.assertFalse(g("strong", 757.4)); self.assertFalse(g("weak", 757.4))
+        self.assertTrue(g("weak", 755.0)); self.assertFalse(g("neutral", 755.0))
+        self.assertTrue(g("strong", 760.0)); self.assertFalse(g("neutral", 760.0))
+        # neutral-high: Strong row only when 8:23 was strong; otherwise Neutral; unknown 8:23 => hold
+        self.assertTrue(g("strong", 757.85, case_0823="strong")); self.assertFalse(g("neutral", 757.85, case_0823="strong"))
+        self.assertTrue(g("neutral", 757.85, case_0823="weak")); self.assertFalse(g("strong", 757.85, case_0823="neutral"))
+        self.assertFalse(g("strong", 757.85)); self.assertFalse(g("neutral", 757.85))
+
+    def test_tagged_fail_closed(self):
+        ok, why = rth.r6_gate(RECLAIM(scenario_row="neutral"), r6_bars(757.4), at(8, 45))  # no prior_close
+        self.assertFalse(ok); self.assertIn("fail closed", why)
+        self.assertFalse(rth.r6_gate(self.tk(scenario_row="sideways"), r6_bars(757.4), at(8, 45))[0])
+        t = RECLAIM(scenario_row="neutral", underlying_trigger={**RECLAIM()["underlying_trigger"], "prior_close": 759.81})
+        self.assertTrue(rth.r6_gate(t, r6_bars(757.4), at(8, 45))[0])  # also read from underlying_trigger
+
+    def test_decide_integration(self):
+        self.cfg(earliest_entry_ct="08:45")
+        d = self.decide(self.tk(scenario_row="neutral"), r6_bars(757.4), at(8, 45))
+        self.assertEqual(d["action"], "fire", d["reason"]); self.assertEqual(d["meta"]["size_factor"], 0.5)
+        d = self.decide(self.tk(scenario_row="strong"), r6_bars(757.4), at(8, 45))
+        self.assertEqual(d["action"], "wait"); self.assertIn("not live", d["reason"])
+
+
+class R10Kill(_FW):
+    def short(self, **kw):
+        return STOCK(underlying_trigger={"failure": "decisive acceptance below 750 (5-min hold) with RVOL >= 1.2x", "rvol_min": 1.2}, **kw)
+
+    def go(self, t, bars, now, zg):
+        oi = rth.compute_or(bars, now, rvol={"tod_rvol": 1.5, "bar_rvol": None, "source": "test"})
+        oi["zero_gamma_0dte_live"] = zg
+        return rth.decide_armed_ticket(t, oi, bars, now)
+
+    def test_close_above_zg_cancels_short_continuation(self):
+        bars = or_bars(750.2, 752.0) + [bar(9, 0, 751.0, 751.8, 750.9, 751.6), bar(9, 5, 751.6, 751.7, 749.4, 749.6)]
+        d = self.go(self.short(leg_type="continuation"), bars, at(9, 10, 1), 751.5)
+        self.assertEqual((d["action"], d.get("rule")), ("invalidate", "R10")); self.assertIn("09:00", d["reason"])
+        # untagged / other leg types keep today's behaviour
+        self.assertEqual(self.go(self.short(), bars, at(9, 10, 1), 751.5)["action"], "fire")
+        self.assertEqual(self.go(self.short(leg_type="breakout"), bars, at(9, 10, 1), 751.5)["action"], "fire")
+        # zero-gamma above every close => no kill
+        self.assertEqual(self.go(self.short(leg_type="continuation"), bars, at(9, 10, 1), 752.5)["action"], "fire")
+
+    def test_mirror_for_longs(self):
+        bars = or_bars(756.0, 758.9) + [bar(9, 0, 758.9, 759.0, 757.8, 758.0), bar(9, 5, 758.0, 759.5, 757.85, 759.3)]
+        d = self.go(BREAKOUT(leg_type="continuation"), bars, at(9, 10, 1), 758.5)
+        self.assertEqual(d["action"], "invalidate"); self.assertIn("below", d["reason"])
+
+    def test_unknown_zero_gamma_holds_and_ticket_fallback(self):
+        bars = or_bars(750.2, 752.0) + [bar(9, 5, 751.6, 751.7, 749.4, 749.6)]
+        d = self.go(self.short(leg_type="continuation"), bars, at(9, 10, 1), None)
+        self.assertEqual(d["action"], "wait"); self.assertIn("fail closed", d["reason"])
+        d = self.go(self.short(leg_type="continuation", zero_gamma_0dte=753.0), bars, at(9, 10, 1), None)
+        self.assertEqual(d["action"], "fire", d["reason"])
+
+    def test_live_zero_gamma_freshness(self):
+        doc = {"summary": {"zero_gamma_0dte": 759.9, "timestamp_ct": f"{DAY_S}T09:20:00-0600"}}
+        self.assertEqual(rth.live_zero_gamma_0dte(doc, at(9, 30)), 759.9)
+        self.assertIsNone(rth.live_zero_gamma_0dte(doc, at(11, 0)))
+        self.assertIsNone(rth.live_zero_gamma_0dte({"summary": {"zero_gamma_0dte": 759.9, "timestamp_ct": "2030-11-07T15:20:00-0600"}}, at(9, 30)))
+
+
+class R17Rearm(_FW):
+    def base(self):
+        return or_bars(756.0, 758.9)
+
+    def test_gate_block_recorded_once(self):
+        b = self.base() + [bar(9, 0, 758.8, 759.4, 758.7, 759.3)]
+        d = self.decide(BREAKOUT(), b, at(9, 5, 1), tod=1.0)  # price trigger met, RVOL gate blocks
+        self.assertEqual(d["action"], "wait"); self.assertTrue(d["meta"].get("gate_block"))
+        f = rth.r17_record_block(BREAKOUT(), d["rules"], b, at(9, 5, 1), d["meta"]["trigger_bar_ct"])
+        self.assertEqual(f, {"r17_blocked_bar_ct": "09:00", "r17_blocked_count": 1})
+        t = BREAKOUT(**f)
+        self.assertIsNone(rth.r17_record_block(t, d["rules"], b, at(9, 6), "09:00"))
+        # still beyond the level on the next bar with no retest: not chased, not re-counted
+        b2 = b + [bar(9, 5, 759.3, 759.8, 759.2, 759.6)]
+        d = self.decide(t, b2, at(9, 10, 1), tod=1.5)
+        self.assertEqual(d["action"], "wait"); self.assertIn("no chasing", d["reason"])
+        self.assertIsNone(rth.r17_record_block(t, d["rules"], b2, at(9, 10, 1), "09:05"))
+
+    def test_rearm_by_retest_that_holds(self):
+        t = BREAKOUT(r17_blocked_bar_ct="09:00", r17_blocked_count=1)
+        b = self.base() + [bar(9, 0, 758.8, 759.4, 758.7, 759.3), bar(9, 5, 759.3, 759.5, 758.95, 759.4)]
+        d = self.decide(t, b, at(9, 10, 1), tod=1.5)
+        self.assertEqual(d["action"], "fire", d["reason"])
+
+    def test_rearm_by_fresh_break(self):
+        t = BREAKOUT(r17_blocked_bar_ct="09:00", r17_blocked_count=1)
+        b = self.base() + [bar(9, 0, 758.8, 759.4, 758.7, 759.3), bar(9, 5, 759.3, 759.4, 758.5, 758.8)]
+        self.assertEqual(self.decide(t, b, at(9, 10, 1), tod=1.5)["action"], "wait")  # back inside
+        b += [bar(9, 10, 758.8, 759.6, 758.8, 759.5)]
+        self.assertEqual(self.decide(t, b, at(9, 15, 1), tod=1.5)["action"], "fire")
+
+    def test_one_rearm_only_and_not_after_1330(self):
+        t = BREAKOUT(r17_blocked_bar_ct="09:00", r17_blocked_count=1)
+        b = self.base() + [bar(9, 0, 758.8, 759.4, 758.7, 759.3), bar(9, 5, 759.3, 759.4, 758.5, 758.8),
+                           bar(9, 10, 758.8, 759.6, 758.8, 759.5)]
+        d = self.decide(t, b, at(9, 15, 1), tod=1.0)  # blocked again after the re-arm
+        f = rth.r17_record_block(t, d["rules"], b, at(9, 15, 1), d["meta"]["trigger_bar_ct"])
+        self.assertTrue(f["r17_exhausted"]); self.assertEqual(f["r17_blocked_count"], 2)
+        t2 = BREAKOUT(**{**t, **f})
+        d = self.decide(t2, b + [bar(9, 15, 759.5, 759.9, 758.9, 759.7)], at(9, 20, 1), tod=1.5)
+        self.assertEqual(d["action"], "wait"); self.assertIn("scenario done", d["reason"])
+        late = self.base() + [bar(9, 0, 758.8, 759.4, 758.7, 759.3), bar(13, 25, 758.9, 759.4, 758.8, 758.9),
+                              bar(13, 30, 758.9, 759.6, 758.9, 759.5)]
+        d = self.decide(t, late, at(13, 35, 1), tod=1.5)
+        self.assertEqual(d["action"], "wait"); self.assertIn("13:30", d["reason"])
+
+    def test_never_blocked_tickets_unchanged(self):
+        b = self.base() + [bar(9, 0, 758.8, 759.4, 758.7, 759.3)]
+        self.assertEqual(self.decide(BREAKOUT(), b, at(9, 5, 1), tod=1.5)["action"], "fire")
+
+    def test_half_tier_two_bar_wait_is_not_a_block(self):
+        self.cfg(rvol_half_size_tier_enabled=True)
+        b = self.base() + [bar(9, 0, 758.8, 758.9, 758.4, 758.5), bar(9, 5, 758.5, 759.4, 758.4, 759.3)]
+        d = self.decide(BREAKOUT(), b, at(9, 10, 1), tod=1.0)
+        self.assertEqual(d["action"], "wait"); self.assertFalse(d["meta"].get("gate_block"))
+
+    def test_tick_arm_gate_hold_logs_blocked_move(self):
+        t = BREAKOUT(session_target=DAY_S)
+        bars = self.base() + [bar(9, 0, 758.8, 759.4, 758.7, 759.3)]
+        doc = {"events": []}
+        _tick_env(self, t, bars, at(9, 5, 30), latest_walls(756, 761),
+                  {"load_events": lambda: doc,
+                   "arm_time_gates": lambda pe_, tk, *a, **k: {"action": "hold", "ticket": tk, "why": "SPY mid-range between walls"}})
+        res = rth.alpaca_rth_tick(_TPE)
+        ev = [e for e in doc["events"] if e["kind"] == "BLOCKED_MOVE"]
+        self.assertEqual(len(ev), 1); self.assertEqual(ev[0]["reason_code"], "blocked_move")
+        self.assertEqual(t["r17_blocked_bar_ct"], "09:00")
+        rth.alpaca_rth_tick(_TPE)
+        self.assertEqual(len([e for e in doc["events"] if e["kind"] == "BLOCKED_MOVE"]), 1)
 
 
 class FirewallCheck5(unittest.TestCase):
