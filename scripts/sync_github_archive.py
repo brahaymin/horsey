@@ -317,6 +317,135 @@ def write_index(ts_ct):
 
 
 
+# ----------------------------------------------------------------------------------------------
+# Daily Gamma Tracker (Nov 12 2026): history/daily_tracker.jsonl + .csv, upserted by date.
+# history/ is gitignored and NEVER staged; it reaches the dashboard only via the encrypted vault.
+# The pre-open run writes the row; the post-close run finalizes close + data-only notes.
+TRACKER_COLUMNS = ["date", "close", "premarket_gap_pct", "net_gex_45d", "prev_net_gex_45d", "flip_45d", "hvl_45d",
+                   "call_wall_45d", "put_wall_45d", "pc_vol", "pc_oi", "poc", "vah", "val", "vix",
+                   "futures_bias_class", "regime", "notes"]
+_TRACKER_ROUND = {"close": 2, "premarket_gap_pct": 3, "net_gex_45d": 0, "prev_net_gex_45d": 0, "flip_45d": 2, "hvl_45d": 2,
+                  "call_wall_45d": 2, "put_wall_45d": 2, "pc_vol": 3, "pc_oi": 3, "poc": 2, "vah": 2, "val": 2, "vix": 2}
+
+
+def _tracker_round(row):
+    out = dict(row)
+    for k, n in _TRACKER_ROUND.items():
+        v = out.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[k] = round(float(v), n) if n else round(float(v))
+    return out
+
+
+def tracker_day_notes(ts_rows, day):
+    """Data-only notes: sign changes of 0DTE / 45D net GEX across that day's archived runs."""
+    rows = sorted((r for r in ts_rows if str(r.get("timestamp_ct") or "")[:10] == day), key=lambda r: r.get("timestamp_utc") or "")
+    notes = []
+    for key, label in (("net_gex_0dte_dollars", "0DTE"), ("net_gex_45d_dollars", "45D")):
+        prev = None
+        for r in rows:
+            v = r.get(key)
+            if not isinstance(v, (int, float)) or v == 0:
+                continue
+            if prev is not None and (v > 0) != (prev > 0):
+                notes.append(f"{label} flipped {'long' if v > 0 else 'short'} {str(r.get('timestamp_ct'))[11:16]} CT")
+            prev = v
+    return "; ".join(notes) if notes else ("no net GEX sign change across archived runs" if rows else None)
+
+
+def _atomic_write(path, text):
+    tmp_dir = os.path.join(REPO_DIR, ".git") if os.path.isdir(os.path.join(REPO_DIR, ".git")) else os.path.dirname(path)
+    tmp = os.path.join(tmp_dir, ".tmp_" + os.path.basename(path) + f".{os.getpid()}")
+    with open(tmp, "w", newline="") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def load_daily_tracker(hist_dir):
+    rows = {}
+    p = os.path.join(hist_dir, "daily_tracker.jsonl")
+    if os.path.exists(p):
+        with open(p) as fh:
+            lines = fh.read().splitlines()
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get("date"):
+                rows[r["date"]] = r
+    return rows
+
+
+def write_daily_tracker(hist_dir, rows):
+    import io
+    os.makedirs(hist_dir, exist_ok=True)
+    ordered = [rows[k] for k in sorted(rows)]
+    _atomic_write(os.path.join(hist_dir, "daily_tracker.jsonl"), "".join(json.dumps(r) + "\n" for r in ordered))
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=TRACKER_COLUMNS, extrasaction="ignore")
+    w.writeheader()
+    for r in ordered:
+        w.writerow({k: r.get(k) for k in TRACKER_COLUMNS})
+    _atomic_write(os.path.join(hist_dir, "daily_tracker.csv"), buf.getvalue())
+
+
+def upsert_daily_tracker(snap, run_tag, ts_rows, hist_dir, stamp_ct):
+    """Returns the upserted row (or None when this run does not touch the tracker)."""
+    g = snap.get("gamma_tracker") or {}
+    new = g.get("tracker_row") if isinstance(g, dict) else None
+    day = (new or {}).get("date") or g.get("tracker_date")
+    if not day or run_tag not in ("pre-open", "post-close"):
+        return None
+    if g.get("is_nyse_session") is False:
+        return None
+    rows = load_daily_tracker(hist_dir)
+    cur = dict(rows.get(day) or {c: None for c in TRACKER_COLUMNS})
+    cur["date"] = day
+    if run_tag == "pre-open":
+        if not new:
+            return None
+        for k in TRACKER_COLUMNS:
+            if k not in ("date", "close", "notes"):
+                cur[k] = new.get(k)
+        cur["pre_open_written_ct"] = stamp_ct
+    else:
+        spy = snap.get("spy") or {}
+        if spy.get("session") == day and spy.get("status") == "ok":
+            cur["close"] = spy.get("regular_close", spy.get("close"))
+        cur["notes"] = tracker_day_notes(ts_rows, day)
+        cur["finalized_ct"] = stamp_ct
+    rows[day] = _tracker_round(cur)
+    write_daily_tracker(hist_dir, rows)
+    return rows[day]
+
+
+CHARTS_PYTHON = "/workspace/gamma_charts_venv/bin/python"  # matplotlib lives here, not in the monitor venv
+
+
+def run_morning_charts(day, run_tag):
+    """Fail-safe hook: render the two morning charts (pre-open, or later if today's are missing).
+    Any failure only prints; the archive/vault/publish flow continues unchanged."""
+    charts_py = os.path.join(REPO_DIR, "scripts", "gamma_charts.py")
+    if not os.path.exists(charts_py) or run_tag == "post-close":
+        return None
+    out_dir = os.path.join(REPO_DIR, "pod", "gamma_charts")
+    have = all(os.path.exists(os.path.join(out_dir, f"{day}_{k}.png")) for k in ("outlook", "range"))
+    if run_tag != "pre-open" and have:
+        return None
+    try:
+        py = CHARTS_PYTHON if os.path.exists(CHARTS_PYTHON) else sys.executable
+        r = subprocess.run([py, charts_py, "--date", day], cwd=REPO_DIR, capture_output=True, text=True, timeout=180)
+        print("gamma charts rc", r.returncode, (r.stdout or r.stderr or "").strip()[-300:])
+        return r.returncode
+    except Exception as e:
+        print("gamma charts skipped:", e)
+        return None
+
+
 def _main_unlocked():
     # Pull CEO decisions committed from the web app before writing anything (avoids push conflicts)
     try:
@@ -473,6 +602,7 @@ def _main_unlocked():
         "summary": flat_row,
         "gex_scopes": compact_scopes,
         "verified_headlines": snap.get("verified_headlines", []),
+        "gamma_tracker": snap.get("gamma_tracker"),
     }
     compact_json.update(build_enrichment(snap, spy, assets, futs, cboe_cur))
     compact_json["md_rel_path"] = f"snapshots/{yyyy}/{mm}/{date_str}/{hhmm}-ct-{run_tag}.md"
@@ -520,6 +650,14 @@ def _main_unlocked():
         w.writeheader()
         for r in existing:
             w.writerow({k: r.get(k) for k in CSV_COLUMNS})
+
+    # Daily Gamma Tracker upsert + morning charts (both fail-safe; local/gitignored outputs only)
+    try:
+        trow = upsert_daily_tracker(snap, run_tag, existing, os.path.join(REPO_DIR, "history"), ts_ct)
+        print("daily tracker:", "upserted " + trow["date"] if trow else "unchanged")
+    except Exception as e:
+        print("daily tracker skipped:", e)
+    run_morning_charts(safe_get(snap, "gamma_tracker", "tracker_date") or date_str, run_tag)
 
     with open(os.path.join(REPO_DIR, "README.md"), "w") as f:
         f.write(README_CONTENT)

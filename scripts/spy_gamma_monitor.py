@@ -108,8 +108,194 @@ def scope(rows,spot,now,r,q):
         previous=(z['strike'],cumulative)
     return {'contracts':len(rows),'expirations':sorted(set(o['expiry'] for o in rows)),'totals':totals,'call_walls_by_gex':cwall,'put_walls_by_gex':pwall,'call_walls_by_oi':sorted(p,key=lambda z:z['call_oi'],reverse=True)[:5],'put_walls_by_oi':sorted(p,key=lambda z:z['put_oi'],reverse=True)[:5],'node_735':next((z for z in p if z['strike']==735),None),'node_735_contracts':[o for o in rows if o['strike']==735],'zero_gamma_repriced_model':flip_model(rows,spot,now,r,q),'cumulative_strike_crossings_not_a_spot_gamma_flip':cross,'strike_profile':p}
 
+# ------------------------------------------------------------------ Daily Gamma Tracker fields (Nov 12 2026)
+# Data only, no bias wording. Every value is computed from data this script already fetched
+# (Cboe delayed chain, Yahoo daily + 1-minute bars) or from the local archive time series.
+# Anything that cannot be derived is None, never estimated from thin air.
+CT=ZoneInfo('America/Chicago')
+HVL_LABEL='model estimate (cumulative strike net-GEX zero-crossing), not vendor HVL'
+VP_LABEL='approximation from 1-minute bars, not a tick profile'
+FUT_LABEL='Yahoo delayed ~10 min'
+PREV_GEX_NOTE='expiry roll and OI refresh make prior-session and current net GEX not strictly comparable'
+PC_NOTE='Cboe delayed chain; volume is session-to-date, open interest is from the prior session'
+# NYSE full-day closures (early closes still count as sessions). Unknown year -> None.
+NYSE_HOLIDAYS={
+    2026:{'2026-01-01','2026-01-19','2026-02-16','2026-04-03','2026-05-25','2026-06-19','2026-07-03','2026-09-07','2026-11-26','2026-12-25'},
+    2027:{'2027-01-01','2027-01-18','2027-02-15','2027-03-26','2027-05-31','2027-06-18','2027-07-05','2027-09-06','2027-11-25','2027-12-24'},
+}
+
+def trading_days_left_ytd(d):
+    """NYSE sessions from d through Dec 31 of d's year, including d when d is a session."""
+    hol=NYSE_HOLIDAYS.get(d.year)
+    if hol is None:return None
+    n=0;x=d
+    while x.year==d.year:
+        if x.weekday()<5 and x.isoformat() not in hol:n+=1
+        x+=dt.timedelta(days=1)
+    return n
+
+def is_nyse_session(d):
+    hol=NYSE_HOLIDAYS.get(d.year)
+    return None if hol is None else (d.weekday()<5 and d.isoformat() not in hol)
+
+def gamma_split(profile):
+    if not profile:return None
+    c=sum(abs(z.get('call_gex') or 0.) for z in profile);p=sum(abs(z.get('put_gex') or 0.) for z in profile);t=c+p
+    if t<=0:return {'call_gex_abs':c,'put_gex_abs':p,'call_share':None,'put_share':None,'dominant_side':None}
+    return {'call_gex_abs':c,'put_gex_abs':p,'call_share':c/t,'put_share':p/t,'dominant_side':'call' if c>p else 'put' if p>c else 'balanced'}
+
+def pc_ratios(totals):
+    if not totals:return None
+    return {'put_call_volume':totals.get('put_call_volume_ratio'),'put_call_oi':totals.get('put_call_oi_ratio'),'note':PC_NOTE}
+
+def hvl_model(profile,spot=None):
+    """Zero crossings of cumulative net GEX summed from the lowest strike upward, linearly
+    interpolated between adjacent strikes. Level = crossing nearest spot (or the first one)."""
+    if not profile:return {'status':'unavailable','level':None,'crossings':[],'label':HVL_LABEL}
+    rows=sorted(profile,key=lambda z:z['strike']);cum=0.;prev=None;cross=[]
+    for z in rows:
+        cum+=float(z.get('net_gex') or 0.)
+        if prev is not None:
+            k0,c0=prev
+            if (c0<0<=cum) or (c0>0>=cum):
+                lvl=k0+(0-c0)/(cum-c0)*(z['strike']-k0) if cum!=c0 else z['strike']
+                cross.append({'level':lvl,'direction':'negative_to_positive' if c0<0 else 'positive_to_negative','lower_strike':k0,'upper_strike':z['strike']})
+        prev=(z['strike'],cum)
+    level=None
+    if cross:level=(min(cross,key=lambda c:abs(c['level']-spot)) if spot else cross[0])['level']
+    return {'status':'model_estimate' if cross else 'no_zero_crossing','level':level,'crossings':cross,'label':HVL_LABEL}
+
+def _ny_index(df):
+    idx=df.index
+    if getattr(idx,'tz',None) is None:idx=idx.tz_localize(UTC)
+    return idx.tz_convert(NY)
+
+def volume_profile(intra,session,bin_size=0.25,value_area=0.70):
+    """Regular hours (8:30 AM-3:00 PM CT) volume profile for `session` from 1-minute bars; each
+    bar's volume is placed at its typical price (H+L+C)/3 rounded to the nearest $0.25 bin."""
+    base={'session':session.isoformat() if session else None,'bin_size':bin_size,'label':VP_LABEL,'poc':None,'vah':None,'val':None}
+    if intra is None or getattr(intra,'empty',True) or session is None:return dict(base,status='unavailable_no_bars')
+    idx=_ny_index(intra);t=idx.time
+    m=(idx.date==session)&(t>=dt.time(9,30))&(t<dt.time(16,0))
+    bars=intra[m]
+    if bars.empty:return dict(base,status='unavailable_no_session_bars')
+    bins={}
+    for h,l,c,v in zip(bars.High,bars.Low,bars.Close,bars.Volume):
+        if not all(map(math.isfinite,[float(h),float(l),float(c),float(v)])) or float(v)<=0:continue
+        b=round(round(((float(h)+float(l)+float(c))/3)/bin_size)*bin_size,4);bins[b]=bins.get(b,0.)+float(v)
+    if not bins:return dict(base,status='unavailable_zero_volume')
+    lo,hi=min(bins),max(bins);n=int(round((hi-lo)/bin_size))+1
+    grid=[round(lo+i*bin_size,4) for i in range(n)];vols=[bins.get(g,0.) for g in grid]
+    total=sum(vols);ip=max(range(n),key=lambda i:(vols[i],-abs(i-n/2)))
+    a=b=ip;acc=vols[ip]
+    while acc<value_area*total and (a>0 or b<n-1):
+        up=vols[b+1] if b<n-1 else -1;dn=vols[a-1] if a>0 else -1
+        if up>=dn:b+=1;acc+=vols[b]
+        else:a-=1;acc+=vols[a]
+    return dict(base,status='ok',poc=grid[ip],vah=grid[b],val=grid[a],total_volume=total,bars_used=int(len(bars)),value_area_volume_share=acc/total if total else None)
+
+def prev_net_gex(history_path,tracker_date):
+    """45D and 0DTE net GEX from the latest post-close row dated before tracker_date."""
+    out={'net_gex_45d':None,'net_gex_0dte':None,'source_timestamp_ct':None,'note':PREV_GEX_NOTE}
+    p=Path(history_path) if history_path else None
+    if not p or not p.exists():return dict(out,status='unavailable_no_history')
+    best=None
+    for line in p.read_text().splitlines():
+        try:r=json.loads(line)
+        except Exception:continue
+        ts=str(r.get('timestamp_ct') or '')
+        if r.get('run_tag')!='post-close' or ts[:10]>=tracker_date.isoformat():continue
+        if best is None or ts>str(best.get('timestamp_ct')):best=r
+    if not best:return dict(out,status='unavailable_no_prior_post_close')
+    return dict(out,status='ok',net_gex_45d=best.get('net_gex_45d_dollars'),net_gex_0dte=best.get('net_gex_0dte_dollars'),source_timestamp_ct=best.get('timestamp_ct'),source_session=best.get('session_date'))
+
+def overnight_futures(intra,tracker_date,cutoff_ct=dt.time(8,20),now=None):
+    """ref = price at the prior 3:00 PM CT cash close; low/time since then; price at 8:20 CT."""
+    out={'label':FUT_LABEL,'ref':None,'ref_time_ct':None,'low':None,'low_time_ct':None,'p0820':None,'p0820_time_ct':None,'gap_dollars':None,'gap_pct':None,'pct_retraced':None,'classification':None}
+    if intra is None or getattr(intra,'empty',True):return dict(out,status='unavailable_no_bars')
+    idx=_ny_index(intra);df=intra.copy();df.index=idx;df=df.dropna(subset=['Close'])
+    # prior cash close: last bar starting before 16:00 ET on the latest earlier date with such a bar
+    prior=df[(df.index.date<tracker_date)&(df.index.time<dt.time(16,0))]
+    if prior.empty:return dict(out,status='unavailable_no_prior_close_bar')
+    pdate=prior.index[-1].date();pb=prior[prior.index.date==pdate]
+    ref_bar=pb.iloc[-1];ref_t=pb.index[-1]
+    if ref_t.time()<dt.time(15,50):return dict(out,status='unavailable_prior_close_bar_missing')
+    ref=float(ref_bar.Close)
+    cutoff=dt.datetime.combine(tracker_date,cutoff_ct,CT).astimezone(NY)
+    end=min(cutoff,now.astimezone(NY)) if now else cutoff
+    win=df[(df.index>ref_t)&(df.index<end)]
+    if win.empty:return dict(out,ref=ref,ref_time_ct=ref_t.astimezone(CT).isoformat(),status='unavailable_no_overnight_bars')
+    li=win.Low.astype(float).idxmin();low=float(win.Low.loc[li]);last=win.iloc[-1];p=float(last.Close)
+    o=dict(out,ref=ref,ref_time_ct=(ref_t+pd.Timedelta(minutes=1)).astimezone(CT).isoformat(),low=low,low_time_ct=li.astimezone(CT).isoformat(),p0820=p,
+           p0820_time_ct=(win.index[-1]+pd.Timedelta(minutes=1)).astimezone(CT).isoformat(),gap_dollars=p-ref,gap_pct=(p/ref-1)*100,
+           status='ok' if end>=cutoff else 'partial_before_0820')
+    if low<ref:o['pct_retraced']=(p-low)/(ref-low)
+    o['classification']=classify_futures(ref,low,p)
+    return o
+
+def classify_futures(ref,low,p0820):
+    if ref is None or low is None or p0820 is None:return None
+    if (ref-low)/ref<=0.0025 or p0820>=ref:return 'flat_or_green'
+    return 'dipped_recovering' if (p0820-low)/(ref-low)>=0.5 else 'dipped_not_recovering'
+
+def regime_from_gex(net):
+    if net is None:return None
+    return 'neutral' if abs(net)<1e9 else 'short' if net<0 else 'long'
+
+TRACKER_COLUMNS=['date','close','premarket_gap_pct','net_gex_45d','prev_net_gex_45d','flip_45d','hvl_45d','call_wall_45d','put_wall_45d','pc_vol','pc_oi','poc','vah','val','vix','futures_bias_class','regime','notes']
+
+def build_gamma_tracker(options,spy,assets,ys,now,history_path,profile_session):
+    D=now.astimezone(CT).date();sc=((options or {}).get('scopes') or {}) if (options or {}).get('status')=='ok' else {}
+    for k,z in sc.items():
+        z['gamma_split']=gamma_split(z.get('strike_profile'));z['pc_ratios']=pc_ratios(z.get('totals'))
+    spot=(options or {}).get('gex_spot')
+    hvl={k:hvl_model(sc[s].get('strike_profile'),spot) if s in sc else {'status':'unavailable','level':None,'crossings':[],'label':HVL_LABEL} for k,s in [('0dte','next_session'),('45d','upcoming_45d')]}
+    for k,s in [('0dte','next_session'),('45d','upcoming_45d')]:
+        if s in sc:sc[s]['hvl_model']=hvl[k]
+    flip={k:(sc[s].get('zero_gamma_repriced_model') or {}).get('zero_gamma_level') if s in sc else None for k,s in [('0dte','next_session'),('45d','upcoming_45d')]}
+    spy_intra=ys.get('SPY',(None,None,None))[2]
+    vp=volume_profile(spy_intra,profile_session)
+    prev=prev_net_gex(history_path,D)
+    fut={s:overnight_futures(ys.get(s,(None,None,None))[2],D,now=now) for s in ['ES=F','NQ=F']}
+    ref=spy.get('regular_close',spy.get('close'));cur=((spy.get('cboe_quote') or {}).get('data') or {}).get('current_price')
+    gap=(float(cur)/ref-1)*100 if cur and ref else None
+    s45=sc.get('upcoming_45d') or {};t45=s45.get('totals') or {}
+    net45=t45.get('net_gex')
+    fb=(fut['ES=F'].get('classification') or fut['NQ=F'].get('classification'))
+    row={'date':D.isoformat(),'close':None,'premarket_gap_pct':gap,'net_gex_45d':net45,'prev_net_gex_45d':prev.get('net_gex_45d'),
+         'flip_45d':flip['45d'],'hvl_45d':hvl['45d']['level'],'call_wall_45d':(s45.get('call_walls_by_gex') or [{}])[0].get('strike'),
+         'put_wall_45d':(s45.get('put_walls_by_gex') or [{}])[0].get('strike'),'pc_vol':t45.get('put_call_volume_ratio'),'pc_oi':t45.get('put_call_oi_ratio'),
+         'poc':vp.get('poc'),'vah':vp.get('vah'),'val':vp.get('val'),'vix':(assets.get('^VIX') or {}).get('close'),
+         'futures_bias_class':fb,'regime':regime_from_gex(net45),'notes':None}
+    return {'tracker_date':D.isoformat(),'is_nyse_session':is_nyse_session(D),'trading_days_left_ytd':trading_days_left_ytd(D),
+            'premarket_gap_pct':gap,'premarket_gap_basis':{'reference_close':ref,'delayed_quote':cur},
+            'gamma_split':{k:sc[s].get('gamma_split') if s in sc else None for k,s in [('0dte','next_session'),('45d','upcoming_45d')]},
+            'pc_ratios':{k:sc[s].get('pc_ratios') if s in sc else None for k,s in [('0dte','next_session'),('45d','upcoming_45d'),('all','upcoming_all')]},
+            'hvl_model':hvl,'zero_gamma_repriced':flip,'volume_profile':vp,'prev_net_gex':prev,'overnight_futures':fut,
+            'regime_45d':row['regime'],'regime_rule':'neutral when |45D net GEX| < $1B, otherwise short or long by sign',
+            'tracker_columns':TRACKER_COLUMNS,'tracker_row':row,
+            'not_derivable':{}}
+
+def tracker_md_lines(g,fmt):
+    if not isinstance(g,dict) or 'tracker_row' not in g:return ['','## Daily gamma tracker fields','- unavailable']
+    r=g['tracker_row'];vp=g.get('volume_profile') or {};h=g.get('hvl_model') or {};pv=g.get('prev_net_gex') or {}
+    L=['','## Daily gamma tracker fields (data only)',f"- Trading days left in {r['date'][:4]} (including today): {g.get('trading_days_left_ytd')}",
+       f"- Pre-market gap vs prior close: {fmt(g.get('premarket_gap_pct'),3)}%",
+       '','| Scope | Call gamma share | Put gamma share | Dominant | P/C volume | P/C OI | Model gamma flip | HVL model |','|---|---:|---:|---|---:|---:|---:|---:|']
+    for k in ['0dte','45d']:
+        s=(g.get('gamma_split') or {}).get(k) or {};p=(g.get('pc_ratios') or {}).get(k) or {}
+        L.append(f"| {k.upper()} | {fmt(s.get('call_share'),3)} | {fmt(s.get('put_share'),3)} | {s.get('dominant_side') or 'NA'} | {fmt(p.get('put_call_volume'),3)} | {fmt(p.get('put_call_oi'),3)} | {fmt((g.get('zero_gamma_repriced') or {}).get(k),2)} | {fmt((h.get(k) or {}).get('level'),2)} |")
+    L+=[f"- HVL: {HVL_LABEL}. P/C: {PC_NOTE}.",
+        f"- Prior-session volume profile ({vp.get('session')}): POC {fmt(vp.get('poc'),2)}, VAH {fmt(vp.get('vah'),2)}, VAL {fmt(vp.get('val'),2)} ({VP_LABEL})",
+        f"- Prior post-close net GEX: 45D {fmt(pv.get('net_gex_45d'),0)}, 0DTE {fmt(pv.get('net_gex_0dte'),0)} ({pv.get('source_timestamp_ct')}; {PREV_GEX_NOTE})",
+        '','| Futures | Ref (3:00 PM CT) | Overnight low | Low time | 8:20 CT | Gap $ | Gap % | Retraced | Class |','|---|---:|---:|---|---:|---:|---:|---:|---|']
+    for s,o in (g.get('overnight_futures') or {}).items():
+        L.append(f"| {s} | {fmt(o.get('ref'),2)} | {fmt(o.get('low'),2)} | {o.get('low_time_ct') or 'NA'} | {fmt(o.get('p0820'),2)} | {fmt(o.get('gap_dollars'),2)} | {fmt(o.get('gap_pct'),3)} | {fmt(o.get('pct_retraced'),3)} | {o.get('classification') or 'NA'} |")
+    L+=[f"- Futures: {FUT_LABEL}. Regime rule: {g.get('regime_rule')}; 45D regime: {g.get('regime_45d')}"]
+    return L
+
 def main():
-    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--asof');ap.add_argument('--offline',action='store_true');ap.add_argument('--data-dir',default='/workspace/spy_gamma_data');ap.add_argument('--output',default='/workspace/spy_gamma_snapshot.json');ap.add_argument('--summary',default='/workspace/spy_gamma_summary.md');ap.add_argument('--rate',type=float,default=.04);ap.add_argument('--dividend-yield',type=float,default=.012);ap.add_argument('--headlines-json',default='/workspace/spy_gamma_headlines.json');a=ap.parse_args()
+    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--asof');ap.add_argument('--offline',action='store_true');ap.add_argument('--data-dir',default='/workspace/spy_gamma_data');ap.add_argument('--output',default='/workspace/spy_gamma_snapshot.json');ap.add_argument('--summary',default='/workspace/spy_gamma_summary.md');ap.add_argument('--rate',type=float,default=.04);ap.add_argument('--dividend-yield',type=float,default=.012);ap.add_argument('--headlines-json',default='/workspace/spy_gamma_headlines.json');ap.add_argument('--history-jsonl',default='/workspace/horsey/history/timeseries.jsonl');a=ap.parse_args()
     now=dt.datetime.now(UTC);local=now.astimezone(NY);asof=dt.date.fromisoformat(a.asof) if a.asof else local.date() if local.hour>=16 else local.date()-dt.timedelta(days=1)
     directory=Path(a.data_dir);directory.mkdir(parents=True,exist_ok=True);errors=[];sources=[]
     def fetch_json(url,name):
@@ -129,7 +315,12 @@ def main():
                 if h.empty:raise ValueError('empty daily history')
                 h.to_json(p,orient='table',date_format='iso');mp.write_text(json.dumps(meta,default=str))
                 if s.endswith('=F'):
-                    intra=t.history(period='2d',interval='1m',prepost=True,timeout=20);intra.to_json(ip,orient='table',date_format='iso')
+                    intra=t.history(period='5d',interval='1m',prepost=True,timeout=20);intra.to_json(ip,orient='table',date_format='iso')
+                elif s=='SPY':
+                    # regular-hours 1-minute bars for the prior-session volume profile (tracker POC/VAH/VAL)
+                    try:
+                        intra=t.history(period='5d',interval='1m',prepost=False,timeout=20);intra.to_json(ip,orient='table',date_format='iso')
+                    except Exception as e:errors.append({'source':'yfinance intraday','symbol':s,'error':str(e)});intra=None
             sources.append({'source':'Yahoo Finance via yfinance','symbol':s,'latest_daily_session':str(h.index[-1].date()),'metadata_regular_market_time':str(meta.get('regularMarketTime')),'retrieved_at':now.isoformat() if not a.offline else None})
             return s,h,meta,intra
         except Exception as e:errors.append({'source':'yfinance','symbol':s,'error':str(e)});return s,None,{},None
@@ -255,6 +446,8 @@ def main():
                 price=float(bars.Close.iloc[-1]);base=m.get('close');entry['overnight']={'latest':price,'timestamp':str(bars.index[-1]),'high':float(bars.High.max()),'low':float(bars.Low.min()),'open':float(bars.Open.iloc[0]),'volume':int(bars.Volume.sum()) if bars.Volume.sum()>0 else None,'change_vs_completed_daily_close_pct':(price/base-1)*100 if base else None,'reference_close':base,'reference_type':'Yahoo completed daily close; not certified settlement'}
             else:entry['overnight_status']='unavailable_no_bars_since_18_ET; do not infer Globex bias from stale prior-session data'
         futures[s]=entry
+    try:gamma_tracker=build_gamma_tracker(options,spy,assets,ys,now,a.history_jsonl,asof)
+    except Exception as e:errors.append({'source':'gamma_tracker','error':str(e)});gamma_tracker={'status':'error','error':str(e)}
     vx=assets.get('^VIX',{}).get('close');v3=assets.get('^VIX3M',{}).get('close');v9=assets.get('^VIX9D',{}).get('close')
     term={'vix_over_vix3m':vx/v3 if vx and v3 else None,'vix9d_minus_vix':v9-vx if vx and v9 else None,'vix_minus_vix3m':vx-v3 if vx and v3 else None,'regime':'backwardated_implied_volatility_tenors' if vx and v3 and vx>v3 else 'contango_implied_volatility_tenors' if vx and v3 else 'unavailable','note':'spot implied-volatility horizons, NOT a VIX futures curve'}
     headlines=[]
@@ -262,7 +455,7 @@ def main():
         wanted={asof.isoformat()}
         if live_session: wanted.add(live_session.isoformat())
         headlines=[x for x in json.loads(Path(a.headlines_json).read_text()) if x.get('session') in wanted]
-    result={'schema_version':'1.0','generated_at_utc':now.isoformat(),'requested_completed_session':asof.isoformat(),'live_quote_session':live_session.isoformat() if live_session else None,'spy_regular_close':spy.get('regular_close',spy.get('close')),'replay_mode':a.offline,'spy':spy,'options_gex':options,'volatility':{'term_structure':term,'cboe_crosschecks':vol},'assets':assets,'futures':futures,'verified_headlines':headlines,'headlines_status':'dated manually verified public reporting; no automatic claim of verification' if headlines else 'unavailable; supply dated verified article metadata via --headlines-json','sources':sources,'data_normalizations':adjustments,'errors':errors,'methodology':{'sma':'arithmetic mean of last N unadjusted Close observations through completed session; source quotes snapped to 0.0001 to suppress Yahoo float32 artifacts; no dividends adjustment','returns':'close-to-close; 1, 5, 20 trading observations; split-adjusted Yahoo OHLC, dividends unadjusted','volume':'session shares / mean prior 20 completed sessions, excluding today; share volume is NOT signed fund flow','gamma_flip':'reprice all unexpired gammas at trial spot using frozen IV Black-Scholes; cumulative strike crossing separately named and is not a dealer zero-gamma spot','data_limits':'public delayed data; OI typically prior session and not verified intraday; rounded source gamma; actual dealer position unknown; no level independently validates actual dealer hedging','rate_and_dividend':'explicit configurable model assumptions, NOT measured market inputs'}}
+    result={'schema_version':'1.0','generated_at_utc':now.isoformat(),'requested_completed_session':asof.isoformat(),'live_quote_session':live_session.isoformat() if live_session else None,'spy_regular_close':spy.get('regular_close',spy.get('close')),'replay_mode':a.offline,'spy':spy,'options_gex':options,'volatility':{'term_structure':term,'cboe_crosschecks':vol},'assets':assets,'futures':futures,'gamma_tracker':gamma_tracker,'verified_headlines':headlines,'headlines_status':'dated manually verified public reporting; no automatic claim of verification' if headlines else 'unavailable; supply dated verified article metadata via --headlines-json','sources':sources,'data_normalizations':adjustments,'errors':errors,'methodology':{'sma':'arithmetic mean of last N unadjusted Close observations through completed session; source quotes snapped to 0.0001 to suppress Yahoo float32 artifacts; no dividends adjustment','returns':'close-to-close; 1, 5, 20 trading observations; split-adjusted Yahoo OHLC, dividends unadjusted','volume':'session shares / mean prior 20 completed sessions, excluding today; share volume is NOT signed fund flow','gamma_flip':'reprice all unexpired gammas at trial spot using frozen IV Black-Scholes; cumulative strike crossing separately named and is not a dealer zero-gamma spot','data_limits':'public delayed data; OI typically prior session and not verified intraday; rounded source gamma; actual dealer position unknown; no level independently validates actual dealer hedging','rate_and_dividend':'explicit configurable model assumptions, NOT measured market inputs'}}
     lines=['# SPY Gamma Structure & Regime Snapshot',f'Generated {now.isoformat()} | completed session {asof} | replay={a.offline}','', '| Symbol | Close | 1D % | 5D % | 20D % | Volume | Vol / prior20 | 200 SMA |','|---|---:|---:|---:|---:|---:|---:|---:|']
     fmt=lambda v,n=4:'NA' if v is None else f'{v:,.{n}f}'
     for s in SYMS:
@@ -274,6 +467,7 @@ def main():
         for k,z in options['scopes'].items():
             n=z['node_735']
             if n:lines.append('| '+k+' | '+' | '.join(fmt(n.get(v),4 if 'gamma' in v else 2 if v=='net_gex' else 0) for v in ['call_oi','put_oi','call_volume','put_volume','call_gamma_oi','put_gamma_oi','net_gex'])+' |')
+    lines+=tracker_md_lines(gamma_tracker,fmt)
     lines+=['','## Methodology and limitations']+[f'- {k}: {v}' for k,v in result['methodology'].items()]
     lines+=['','## Verified dated headlines']+[f"- [{h['title']}]({h['url']}): {h['summary']}" for h in headlines]
     lines+=['','## SPY price / moving averages']
