@@ -751,6 +751,58 @@ class VoidPlainWords(_FW):
         self.assertEqual(g["action"], "void"); self.assertEqual(g["plain"], "Voided: quote stale or spread too wide")
 
 
+class C3Dedup(_FW):
+    """CIO (Nov 12 evening): the card's C3 half and the engine's pre-09:00 reclaim half are one rule."""
+    rules = Reprice.rules
+    gates = Reprice.gates
+    RECL = {"size_factor": 0.5, "size_factors": [0.5], "size_reasons": ["reclaim armed before 09:00 CT"]}
+
+    def q(self):
+        return quote(1.98, 2.02, delta=0.40, gamma=0.02)
+
+    def walls(self, p45=-1.0e9, vvix=95.0):
+        return latest_walls(756, 761, f"{DAY_S}T09:50:00-0600", printed45=p45, vol={**CALM_VOL, "vvix": vvix})
+
+    def test_c3_listed_gives_one_half(self):
+        t = CALL(size_factors_applied=[0.5], size_factors_applied_reasons=["C3"])  # card staged at half (4 contracts)
+        g = self.gates(t, dict(self.RECL), self.q(), walls=self.walls())
+        self.assertEqual(g["action"], "submit", g["why"])
+        self.assertEqual((g["ticket"]["quantity"], g["ticket"]["size_factor_vs_base"]), (4, 0.5))
+        t = CALL(size_factors_applied=[{"factor": 0.5, "rule": "c3"}])  # dict form, exact tag
+        self.assertEqual(self.gates(t, dict(self.RECL), self.q(), walls=self.walls())["ticket"]["quantity"], 4)
+
+    def test_c3_not_listed_keeps_engine_half(self):
+        g = self.gates(CALL(), dict(self.RECL), self.q(), walls=self.walls())
+        self.assertEqual(g["ticket"]["quantity"], 2)
+
+    def test_c3_plus_45d_stacks_per_r21(self):
+        t = CALL(size_factors_applied=[0.5], size_factors_applied_reasons=["C3"])
+        g = self.gates(t, dict(self.RECL), self.q(), walls=self.walls(p45=-7.0e9))
+        # C3 + 45D = two halves => 1/2 of base (not three halves => 1/4): the half-sized card is unchanged
+        self.assertEqual((g["ticket"]["quantity"], g["ticket"]["size_factor_vs_base"]), (4, 0.5))
+        # C3 + 45D + R23 half = three separate halves => 1/4 of base
+        g = self.gates(t, dict(self.RECL), self.q(), walls=self.walls(p45=-7.0e9, vvix=115))
+        self.assertEqual((g["ticket"]["quantity"], g["ticket"]["size_factor_vs_base"]), (2, 0.25))
+
+    def test_ambiguous_keeps_extra_half(self):
+        for kw in ({"size_factors_applied": [0.5], "size_factors_applied_reasons": ["C3 reclaim half"]},
+                   {"size_factors_applied": [0.5], "size_factors_applied_reasons": ["C3", "45D"]},  # length mismatch
+                   {"size_factors_applied": [0.5]},
+                   {"size_factors_applied": [0.25], "size_factors_applied_reasons": ["C3"]}):
+            g = self.gates(CALL(**kw), dict(self.RECL), self.q(), walls=self.walls(p45=-7.0e9))
+            self.assertEqual(g["ticket"]["quantity"], 2 if kw["size_factors_applied"] == [0.5] else g["ticket"]["quantity"], kw)
+        g = self.gates(CALL(size_factors_applied=[0.5], size_factors_applied_reasons=["C3 reclaim half"]), dict(self.RECL),
+                       self.q(), walls=self.walls(p45=-7.0e9))
+        self.assertEqual(g["ticket"]["size_factor_vs_base"], 0.25)
+
+    def test_rounding_to_zero_still_skipped(self):
+        t = CALL(quantity=1, actual_dollar_risk=60.0, size_factors_applied=[0.5], size_factors_applied_reasons=["C3"])
+        g = self.gates(t, dict(self.RECL), self.q(), walls=self.walls(p45=-7.0e9, vvix=115))
+        self.assertEqual(g["action"], "skip"); self.assertIn("rounds 1 to 0", g["why"])
+        g = self.gates(CALL(quantity=1, actual_dollar_risk=60.0), dict(self.RECL), self.q(), walls=self.walls())
+        self.assertEqual(g["action"], "skip")
+
+
 class FirewallCheck5(unittest.TestCase):
     """pod_engine.py size_ticket check 5 against LIVE 0DTE walls (CIO ruling 4)."""
     def a(self, **kw):

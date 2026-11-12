@@ -1381,7 +1381,7 @@ def evaluate_entry(ticket: dict, or_info: dict, bars_5m: List[dict], now: dateti
         rv_txt = f"RVOL {rvol:.2f} ≥ {rvol_min}"
 
     if mode == "reclaim" and _hm(now) < OR30_END:
-        factors.append(0.5); reasons.append("reclaim armed before 09:00 CT")
+        factors.append(0.5); reasons.append(RECLAIM_PRE_0900_REASON)
     meta["size_factor"] = combine_size_factors(factors)
     meta["size_factors"] = factors
     meta["size_reasons"] = reasons
@@ -1559,6 +1559,34 @@ def _log_once(events_doc: dict, kind: str, tid: str, headline: str, detail: str,
         append_event(events_doc, kind, tid, headline, detail, severity=severity, symbol=symbol)
 
 
+RECLAIM_PRE_0900_REASON = "reclaim armed before 09:00 CT"
+
+
+def staged_size_factors(ticket: dict) -> Tuple[List[float], bool]:
+    """Size factors the card already applied when staging, and whether C3 is strictly among them.
+    Accepted forms: size_factors_applied = [0.5, ...] with a same-length size_factors_applied_reasons
+    = ["C3", ...], or size_factors_applied = [{"factor": 0.5, "rule": "C3"}, ...]. C3 matches only an
+    exact "C3" (case-insensitive) on a 0.5 entry; anything else (length mismatch, other wording) is
+    not C3, so the engine keeps its own pre-09:00 reclaim half (fail toward smaller)."""
+    raw = ticket.get("size_factors_applied") or []
+    if not isinstance(raw, list):
+        return [], False
+    reasons = ticket.get("size_factors_applied_reasons")
+    aligned = isinstance(reasons, list) and len(reasons) == len(raw)
+    pre, c3 = [], False
+    for i, x in enumerate(raw):
+        if isinstance(x, dict):
+            f, tag = _num(x.get("factor")), x.get("rule", x.get("reason"))
+        else:
+            f, tag = _num(x), (reasons[i] if aligned else None)
+        if f is None or not (0 < f < 1):
+            continue
+        pre.append(f)
+        if isinstance(tag, str) and tag.strip().upper() == "C3" and abs(f - 0.5) < 1e-9:
+            c3 = True
+    return pre, c3
+
+
 def arm_time_gates(pe, ticket: dict, rules: dict, meta: dict, bars_5m: List[dict], now: datetime,
                    events_doc: dict, force_sim: bool, latest_doc: Optional[dict] = None,
                    cfg: Optional[dict] = None) -> Dict[str, Any]:
@@ -1598,7 +1626,14 @@ def arm_time_gates(pe, ticket: dict, rules: dict, meta: dict, bars_5m: List[dict
         factors.append(vf); reasons.append(vwhy)
     # R21 is relative to the 0.25% base: factors the card already applied when staging
     # (ticket.size_factors_applied) are counted once, never multiplied in again.
-    pre = [float(x) for x in (ticket.get("size_factors_applied") or []) if _num(x) is not None and 0 < float(x) < 1]
+    pre, card_c3 = staged_size_factors(ticket)
+    if card_c3 and len(factors) == len(reasons) and RECLAIM_PRE_0900_REASON in reasons:
+        # C3 de-dup (CIO, Nov 12 evening): the card's C3 half and the engine's pre-09:00 reclaim half
+        # are the same rule; skip ONLY the engine's own copy. Every other factor still stacks (R21).
+        i = reasons.index(RECLAIM_PRE_0900_REASON)
+        factors = factors[:i] + factors[i + 1:]
+        reasons = reasons[:i] + reasons[i + 1:]
+        meta = {**meta, "c3_dedup": "engine pre-09:00 reclaim half skipped: card lists C3"}
     total = combine_size_factors(pre + factors)
     rel = total / combine_size_factors(pre) if pre else total
     meta = {**meta, "size_factor": min(1.0, rel), "size_factors": factors, "size_reasons": reasons,
