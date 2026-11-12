@@ -44,9 +44,9 @@ def _gov_close(ticket_id, exit_price, kind, opened_ct=None, notes=None):
 
 DONE_STATUSES = {
     "submitted_paper", "filled_paper", "closed_paper", "invalidated_paper", "expired_paper",
-    "cancelled_paper",
+    "cancelled_paper", "voided_paper",
 }
-ENTRY_WINDOW_START = (9, 0)   # CT after OR built
+ENTRY_WINDOW_START = (9, 0)   # CT after OR built (legacy tickets; OR30 completes at 09:00)
 ENTRY_WINDOW_END = (14, 30)
 EOD_FLAT = (14, 45)
 RTH_START = (8, 30)
@@ -265,34 +265,430 @@ def filter_rth_bars(bars: List[dict], day_ct: datetime) -> List[dict]:
     return out
 
 
-def compute_or(bars_5m: List[dict], now: datetime) -> Dict[str, Any]:
-    """30m Opening Range = first six 5m RTH bars once now >= 09:00 CT."""
-    or_bars = [b for b in bars_5m if (b["_dt"].hour, b["_dt"].minute) < (9, 0)]
-    # first six after 08:30
-    or_bars = or_bars[:6]
-    ready = _hm(now) >= (9, 0) and len(or_bars) >= 1
+# ---------------------------------------------------------------------------
+# Nov 12 2026: joint PTJ/Tactician framework v1.2 fixes (CIO tasking C2/C3).
+# Engine settings live in pod/risk/limits.json -> "paper_engine" (local, gitignored).
+# Every default below is the conservative one, so a missing/broken file never loosens a gate.
+# ---------------------------------------------------------------------------
+LIMITS_PATH = ROOT / "pod" / "risk" / "limits.json"
+FED_SPEAKERS_DIR = ROOT / "pod" / "risk" / "fed_speakers"
+OR15_END = (8, 45)
+OR30_END = (9, 0)
+EARLIEST_ENTRY_FLOOR = (8, 45)       # CEO-approved floor (Nov 12 11:21 CT); nothing earlier, whatever the config says
+DEFAULT_EARLIEST_ENTRY = (9, 0)      # used when the config is missing or unreadable
+BAR_MINUTES = 5
+RVOL_FULL = 1.2                      # R15: >= 1.2x full size (the old flat gate)
+RVOL_HALF_FLOOR = 0.8                # R15: 0.8-1.2x half size + 2-bar hold (behind a flag, default OFF)
+BAR_RVOL_SUBSTITUTE = 1.5            # R15: a bar >= 1.5x its slot substitutes for the second hold bar
+SPIKE_CAP_MULT = 8.0
+MIN_RVOL_SESSIONS = 10
+ENGINE_DEFAULTS: Dict[str, Any] = {
+    "earliest_entry_ct": "09:00",
+    "rvol_half_size_tier_enabled": False,
+    "live_walls_max_age_min": 90,
+    "option_quote_max_age_sec": 180,
+    "option_max_spread_pct": 5.0,
+    "reclaim_margin": 0.50,
+}
+
+
+def engine_config() -> Dict[str, Any]:
+    cfg = dict(ENGINE_DEFAULTS)
+    try:
+        doc = json.loads(LIMITS_PATH.read_text(encoding="utf-8"))
+        sec = doc.get("paper_engine") if isinstance(doc, dict) else None
+        if isinstance(sec, dict):
+            for k in ENGINE_DEFAULTS:
+                if k in sec:
+                    cfg[k] = sec[k]
+    except Exception:
+        pass
+    # the half tier loosens the old gate, so only a literal JSON true turns it on
+    cfg["rvol_half_size_tier_enabled"] = cfg.get("rvol_half_size_tier_enabled") is True
+    return cfg
+
+
+def earliest_entry(cfg: Optional[dict] = None) -> Tuple[int, int]:
+    """Configured earliest arm/entry time (CT), never earlier than 08:45; 09:00 if unparsable."""
+    cfg = cfg or engine_config()
+    hm = _hhmm(cfg.get("earliest_entry_ct"))
+    if not hm or not (0 <= hm[0] <= 23 and 0 <= hm[1] <= 59):
+        return DEFAULT_EARLIEST_ENTRY
+    return max(tuple(hm), EARLIEST_ENTRY_FLOOR)
+
+
+def _bar_dt(b: dict) -> datetime:
+    return b.get("_dt") or parse_bar_ts(b["t"])
+
+
+def completed_bars(bars: List[dict], now: datetime) -> List[dict]:
+    """Only bars whose 5-minute interval has ended (start + 5m <= now). A still-forming bar's
+    last tick is never treated as a close (framework C2 / R8 / R13)."""
+    out = []
+    for b in bars or []:
+        dt = _bar_dt(b)
+        if dt + timedelta(minutes=BAR_MINUTES) <= now:
+            if "_dt" not in b:
+                b = dict(b); b["_dt"] = dt
+            out.append(b)
+    return out
+
+
+def load_latest() -> Dict[str, Any]:
+    try:
+        return json.loads(LATEST.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def tod_curve_from_latest(j: dict, now: datetime) -> Tuple[Optional[dict], str]:
+    """Per-slot 20-session curves published by the SPY Gamma Monitor in
+    latest.json -> intraday_feed.spy_5m.slot_curves (slot_ct, avg_volume, avg_cum_volume)."""
+    f5 = ((j or {}).get("intraday_feed") or {}).get("spy_5m") or {}
+    curves = f5.get("slot_curves") or []
+    sessions = [str(x) for x in (f5.get("sessions_used") or [])]
+    if not curves:
+        return None, "time-of-day volume curve missing from latest.json"
+    if len(sessions) < MIN_RVOL_SESSIONS:
+        return None, f"time-of-day volume curve has {len(sessions)} sessions (< {MIN_RVOL_SESSIONS})"
+    today = now.astimezone(CT).date().isoformat()
+    if max(sessions) >= today:
+        return None, "time-of-day volume curve includes today's session"
+    slots = {}
+    for c in curves:
+        try:
+            k = str(c["slot_ct"])[:5]
+            avg, cum = float(c["avg_volume"]), float(c["avg_cum_volume"])
+        except Exception:
+            continue
+        if avg > 0 and cum > 0:
+            slots[k] = (avg, cum)
+    if not slots:
+        return None, "time-of-day volume curve unusable"
+    return {"slots": slots, "sessions": len(sessions), "monitor": f5}, "ok"
+
+
+def compute_tod_rvol(vol_bars: List[dict], curve: dict, now: datetime) -> Dict[str, Any]:
+    """R14: cumulative RTH volume through the last COMPLETED bar / 20-session average cumulative
+    volume through the same slot; each bar capped at 8x its slot average (spike filter).
+    vol_bars must be consolidated-volume bars (Yahoo), the same source as the curve. Fails
+    closed (None) when today's bars have gaps or a slot is missing from the curve."""
+    done = completed_bars(filter_rth_bars(vol_bars, now), now)
+    if not done:
+        return {"tod_rvol": None, "bar_rvol": None, "why": "no completed consolidated bars yet"}
+    slots = curve["slots"]
+    cum, last_cap, prev = 0.0, None, None
+    for b in done:
+        dt = b["_dt"]
+        k = dt.strftime("%H:%M")
+        if k not in slots:
+            return {"tod_rvol": None, "bar_rvol": None, "why": f"slot {k} missing from curve"}
+        if prev is not None and (dt - prev) != timedelta(minutes=BAR_MINUTES):
+            return {"tod_rvol": None, "bar_rvol": None, "why": f"gap in consolidated bars before {k}"}
+        prev = dt
+        last_cap = min(float(b.get("v") or 0), SPIKE_CAP_MULT * slots[k][0])
+        cum += last_cap
+    if (done[0]["_dt"].hour, done[0]["_dt"].minute) != (8, 30):
+        return {"tod_rvol": None, "bar_rvol": None, "why": "consolidated bars do not start at 08:30"}
+    k = done[-1]["_dt"].strftime("%H:%M")
+    avg, avgcum = slots[k]
+    return {"tod_rvol": round(cum / avgcum, 4), "bar_rvol": round(last_cap / avg, 4), "slot_ct": k,
+            "source": "yahoo_5m_consolidated_vs_monitor_curve", "sessions": curve["sessions"], "why": "ok"}
+
+
+def live_rvol(now: datetime, entry_bars: List[dict], latest_doc: Optional[dict] = None,
+              fetch_vol_bars=None) -> Dict[str, Any]:
+    """Time-of-day RVOL for the tick. Curve from latest.json (monitor), numerator from Yahoo 5m
+    consolidated bars. If Yahoo fails, the monitor's own tod_rvol is used only when it is for
+    the same last completed slot as the watcher's bars. Otherwise None (gates fail closed)."""
+    j = latest_doc if latest_doc is not None else load_latest()
+    curve, why = tod_curve_from_latest(j, now)
+    if curve is None:
+        return {"tod_rvol": None, "bar_rvol": None, "why": why}
+    fetch = fetch_vol_bars or fetch_yahoo_bars_5m
+    try:
+        vb = fetch()
+    except Exception:
+        vb = []
+    out = compute_tod_rvol(vb, curve, now) if vb else {"tod_rvol": None, "bar_rvol": None, "why": "consolidated 5m bars unavailable"}
+    if out.get("tod_rvol") is not None:
+        eb = completed_bars(entry_bars, now)
+        if eb and eb[-1]["_dt"].strftime("%H:%M") != out.get("slot_ct"):
+            out["why"] = f"note: RVOL slot {out.get('slot_ct')} vs trigger bar {eb[-1]['_dt'].strftime('%H:%M')}"
+        return out
+    f5 = curve["monitor"]
+    mt, last = f5.get("tod_rvol"), f5.get("last_completed_bar_ct")
+    eb = completed_bars(entry_bars, now)
+    try:
+        if mt is not None and last and eb:
+            ldt = datetime.fromisoformat(str(last)).astimezone(CT)
+            if ldt.date() == now.astimezone(CT).date() and ldt.strftime("%H:%M") == eb[-1]["_dt"].strftime("%H:%M"):
+                return {"tod_rvol": float(mt), "bar_rvol": f5.get("bar_rvol"), "slot_ct": ldt.strftime("%H:%M"),
+                        "source": "monitor_snapshot_same_slot", "why": "ok"}
+    except Exception:
+        pass
+    return {"tod_rvol": None, "bar_rvol": None, "why": out.get("why") or "RVOL unavailable"}
+
+
+def rvol_tier(tod: Optional[float], full_min: float, half_enabled: bool) -> Dict[str, Any]:
+    """R15 for breakout / continuation / reclaim. full_min = max(ticket RVOL, 1.2).
+    Flag OFF (default): below full_min blocks, exactly like the old flat gate.
+    Flag ON: 0.8x..full_min allows half size with a 2-bar hold; below 0.8x blocks."""
+    if tod is None:
+        return {"allow": False, "factor": 0.0, "hold2": False, "tier": "unavailable",
+                "why": "RVOL unavailable (fail closed)"}
+    if tod >= full_min:
+        return {"allow": True, "factor": 1.0, "hold2": False, "tier": "full", "why": f"RVOL {tod:.2f} ≥ {full_min:g}"}
+    if half_enabled and tod >= RVOL_HALF_FLOOR:
+        return {"allow": True, "factor": 0.5, "hold2": True, "tier": "half",
+                "why": f"RVOL {tod:.2f} in {RVOL_HALF_FLOOR:g}–{full_min:g} (half size, 2-bar hold)"}
+    return {"allow": False, "factor": 0.0, "hold2": False, "tier": "blocked",
+            "why": f"RVOL {tod:.2f} < {full_min:g}" + ("" if not half_enabled else f" and < {RVOL_HALF_FLOOR:g}")}
+
+
+def combine_size_factors(factors: List[float]) -> float:
+    """R21: the smallest factor applies (not multiplied); three or more separate 1/2 factors -> 1/4."""
+    if not factors:
+        return 1.0
+    f = min(factors)
+    if sum(1 for x in factors if abs(x - 0.5) < 1e-9) >= 3:
+        f = min(f, 0.25)
+    return f
+
+
+def fed_speaker_blackout(now: datetime) -> Tuple[bool, str, Optional[str]]:
+    """Framework §5 Fed-speaker pause: no new arming or entries from 5 minutes before to 10 minutes
+    after each scheduled speaker start, read from pod/risk/fed_speakers/YYYY-MM-DD.json
+    ({"date": ..., "speakers": [{"name": ..., "start_ct": "HH:MM"}]}).
+    Returns (blocked, reason, warning). A missing file means no blackouts (warning only);
+    an unreadable or malformed file blocks new entries (fail closed)."""
+    day = now.astimezone(CT).strftime("%Y-%m-%d")
+    p = FED_SPEAKERS_DIR / f"{day}.json"
+    if not p.exists():
+        return False, "", f"no Fed-speaker schedule for {day}; no blackout windows applied"
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        speakers = doc.get("speakers") if isinstance(doc, dict) else doc
+        if isinstance(doc, dict) and doc.get("date") not in (None, day):
+            raise ValueError("date mismatch")
+        if not isinstance(speakers, list):
+            raise ValueError("speakers not a list")
+        wins = []
+        for sp in speakers:
+            hm = _hhmm((sp or {}).get("start_ct"))
+            if not hm:
+                raise ValueError("speaker without start_ct")
+            st = now.astimezone(CT).replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
+            wins.append((str(sp.get("name") or "Fed speaker"), st))
+    except Exception:
+        return True, "Fed-speaker schedule unreadable; new entries held (fail closed)", None
+    for name, st in wins:
+        a, b = st - timedelta(minutes=5), st + timedelta(minutes=10)
+        if a <= now <= b:
+            return True, (f"Fed-speaker pause: {name} {st:%H:%M} CT; no new arming or entries "
+                          f"{a:%H:%M}–{b:%H:%M} CT"), None
+    return False, "", None
+
+
+def live_wall_check(spot: Optional[float], now: datetime, latest_doc: Optional[dict] = None,
+                    cfg: Optional[dict] = None) -> Tuple[bool, str]:
+    """Firewall check 5 at arm time with LIVE 0DTE walls from the monitor snapshot
+    (latest.json summary call_wall_0dte / put_wall_0dte). Blocks mid-range no-man's-land
+    (the middle 40% between the walls). Fails closed when the walls are missing, equal,
+    stale (older than live_walls_max_age_min) or from another session."""
+    cfg = cfg or engine_config()
+    j = latest_doc if latest_doc is not None else load_latest()
+    s = (j or {}).get("summary") or {}
+    try:
+        put, call = float(s.get("put_wall_0dte")), float(s.get("call_wall_0dte"))
+    except Exception:
+        return False, "Live 0DTE walls unavailable; entry held (fail closed)"
+    ts = s.get("timestamp_ct") or (j or {}).get("timestamp_ct")
+    try:
+        tsd = datetime.strptime(str(ts), "%Y-%m-%dT%H:%M:%S%z").astimezone(CT)
+    except Exception:
+        try:
+            tsd = datetime.fromisoformat(str(ts)).astimezone(CT)
+        except Exception:
+            return False, "Live 0DTE walls have no timestamp; entry held (fail closed)"
+    age_min = (now - tsd).total_seconds() / 60.0
+    if tsd.date() != now.astimezone(CT).date() or age_min > float(cfg.get("live_walls_max_age_min") or 90) or age_min < -5:
+        return False, f"0DTE walls are stale (snapshot {tsd:%m-%d %H:%M} CT); entry held (fail closed)"
+    if spot is None:
+        return False, "No completed-bar price for the wall check; entry held"
+    lo, hi = min(put, call), max(put, call)
+    if hi - lo < 1e-9:
+        return False, f"0DTE walls coincide (put {put:g} / call {call:g}); wall check cannot run; entry held (fail closed)"
+    w = hi - lo
+    if (lo + 0.3 * w) < spot < (hi - 0.3 * w):
+        return False, (f"SPY {spot:.2f} is mid-range between the 0DTE walls {lo:g}–{hi:g} "
+                       f"(no-man's-land {lo + 0.3 * w:.2f}–{hi - 0.3 * w:.2f}); entry held")
+    return True, f"0DTE walls {lo:g}/{hi:g} at {tsd:%H:%M} CT; SPY {spot:.2f} not mid-range"
+
+
+def option_live_quote(pe, occ: str) -> Tuple[Optional[dict], str]:
+    """Latest indicative quote + greeks for one contract from the Alpaca data host (read only)."""
+    try:
+        d = pe.alpaca_request("GET", pe.ALPACA_DATA_HOST, "/v1beta1/options/snapshots",
+                              params={"symbols": occ, "feed": "indicative"}, timeout=15) or {}
+    except Exception as e:
+        return None, f"quote request failed: {str(e)[:120]}"
+    snap = (d.get("snapshots") or {}).get(occ) if isinstance(d, dict) else None
+    if not isinstance(snap, dict):
+        return None, "no snapshot for contract"
+    q = snap.get("latestQuote") or {}
+    g = snap.get("greeks") or {}
+    try:
+        bid, ask = float(q.get("bp")), float(q.get("ap"))
+    except Exception:
+        return None, "quote has no bid/ask"
+    return {"bid": bid, "ask": ask, "t": q.get("t"), "delta": g.get("delta"), "gamma": g.get("gamma")}, "ok"
+
+
+def reprice_option_ticket(ticket: dict, rules: dict, quote: Optional[dict], spot: Optional[float],
+                          now: datetime, cfg: Optional[dict] = None) -> Tuple[Optional[dict], str]:
+    """R24 at arm time. Returns (repriced_fields, why) or (None, void_reason).
+    entry = live mid + $0.02. Premium stop = mid - (|delta|*d + 0.5*gamma*d^2) - $0.05, d = distance
+    from spot to the ticket's underlying invalidation level; without greeks or that level, the
+    staged stop/entry ratio is kept. Targets keep their staged R multiples. Quantity is capped so
+    the dollar risk never exceeds the staged dollar risk. Void when the quote is missing, stale,
+    crossed or wider than option_max_spread_pct of mid, or the repriced structure is invalid."""
+    cfg = cfg or engine_config()
+    if not quote:
+        return None, "no live option quote at arm time"
+    bid, ask = quote.get("bid"), quote.get("ask")
+    if bid is None or ask is None or bid <= 0 or ask < bid:
+        return None, f"unusable live quote (bid {bid}, ask {ask})"
+    try:
+        qt = parse_bar_ts(str(quote.get("t")))
+        age = (now - qt).total_seconds()
+    except Exception:
+        return None, "live quote has no timestamp"
+    if age > float(cfg.get("option_quote_max_age_sec") or 180) or age < -60:
+        return None, f"live quote is stale ({age:.0f}s old)"
+    mid = (bid + ask) / 2.0
+    spr = 100.0 * (ask - bid) / mid
+    if spr > float(cfg.get("option_max_spread_pct") or 5.0) + 1e-9:
+        return None, f"spread {spr:.1f}% of mid is above {cfg.get('option_max_spread_pct')}%"
+    s_entry = float(ticket.get("staged_entry", ticket.get("entry")))
+    s_stop = float(ticket.get("staged_stop", ticket.get("stop")))
+    s_t1 = ticket.get("staged_target1", ticket.get("target1"))
+    s_t2 = ticket.get("staged_target2", ticket.get("target2"))
+    s_qty = int(ticket.get("staged_quantity", ticket.get("quantity")))
+    s_risk = ticket.get("staged_actual_dollar_risk", ticket.get("actual_dollar_risk"))
+    s_risk = float(s_risk) if s_risk is not None else abs(s_entry - s_stop) * s_qty * 100
+    if not (s_entry > s_stop > 0):
+        return None, "staged premiums invalid"
+    entry = round(mid + 0.02, 2)
+    inv = (rules or {}).get("inv") or {}
+    delta, gamma = quote.get("delta"), quote.get("gamma")
+    method = "staged_ratio"
+    stop = None
+    if inv.get("level") is not None and spot is not None and delta is not None and gamma is not None:
+        d = abs(float(spot) - float(inv["level"]))
+        stop = mid - (abs(float(delta)) * d + 0.5 * abs(float(gamma)) * d * d) - 0.05
+        method = "greeks_R24"
+    if stop is None:
+        stop = entry * (s_stop / s_entry)
+    stop = round(stop, 2)
+    if stop < 0.01 or stop >= entry:
+        return None, f"repriced premium stop {stop:.2f} invalid vs entry {entry:.2f}"
+    s_r = s_entry - s_stop
+    r_new = entry - stop
+    t1 = round(entry + (float(s_t1) - s_entry) / s_r * r_new, 2) if s_t1 is not None else None
+    t2 = round(entry + (float(s_t2) - s_entry) / s_r * r_new, 2) if s_t2 is not None else None
+    qty = min(s_qty, int(s_risk // (r_new * 100))) if r_new > 0 else 0
+    if qty < 1:
+        return None, f"repriced risk ${r_new * 100:,.0f}/contract exceeds the staged ${s_risk:,.0f} budget"
+    return {"entry": entry, "stop": stop, "target1": t1, "target2": t2, "quantity": qty,
+            "reprice": {"ct": _iso_ct(now), "bid": bid, "ask": ask, "mid": round(mid, 4), "spread_pct": round(spr, 2),
+                        "quote_age_sec": round(age, 1), "delta": delta, "gamma": gamma, "stop_method": method,
+                        "underlying_spot": spot, "underlying_inv": inv.get("level")}}, "ok"
+
+
+GEX45_CAP_DOLLARS = -5e9  # R22: 45D net GEX below -$5B caps size at 1/2
+
+
+def net_gex_45d_conservative(latest_doc: Optional[dict] = None) -> Tuple[Optional[float], Dict[str, Any]]:
+    """CIO rule (Nov 12 2026): wherever 45D net GEX sizes or gates, use the MORE NEGATIVE of
+    (a) the GEX-by-spot grid reading at chain spot (intraday_feed.gex_by_spot.upcoming_45d
+    .net_gex_at_chain_spot) and (b) the chain's printed-gamma 45D net GEX (summary
+    .net_gex_45d_dollars, else gex_scopes.upcoming_45d.totals.net_gex). None if both missing."""
+    j = latest_doc if latest_doc is not None else load_latest()
+    j = j or {}
+
+    def _f(v):
+        try:
+            v = float(v)
+            return v if v == v and abs(v) != float("inf") else None
+        except Exception:
+            return None
+    grid = _f((((j.get("intraday_feed") or {}).get("gex_by_spot") or {}).get("upcoming_45d") or {}).get("net_gex_at_chain_spot"))
+    printed = _f((j.get("summary") or {}).get("net_gex_45d_dollars"))
+    if printed is None:
+        printed = _f((((j.get("gex_scopes") or {}).get("upcoming_45d") or {}).get("totals") or {}).get("net_gex"))
+    vals = [v for v in (grid, printed) if v is not None]
+    used = min(vals) if vals else None
+    src = None if used is None else ("grid_at_chain_spot" if used == grid else "printed_chain_gamma")
+    return used, {"net_gex_45d_grid_at_chain_spot": grid, "net_gex_45d_printed": printed,
+                  "net_gex_45d_used": used, "net_gex_45d_source": src}
+
+
+def _order_by_coid(pe, coid: str) -> Optional[dict]:
+    """Exact lookup of one of OUR orders by client_order_id (not limited to the last N orders)."""
+    try:
+        o = pe.alpaca_request("GET", pe.ALPACA_PAPER_HOST, "/v2/orders:by_client_order_id",
+                              params={"client_order_id": coid})
+    except Exception:
+        return None
+    if isinstance(o, dict) and o.get("client_order_id") == coid and o.get("id"):
+        return o
+    return None
+
+
+def compute_or(bars_5m: List[dict], now: datetime, rvol: Optional[dict] = None) -> Dict[str, Any]:
+    """Opening ranges from COMPLETED 5m bars only (Nov 12 2026 fix).
+
+    OR30 = 08:30-08:55 bars, ready once now >= 09:00 CT (breakout/continuation triggers).
+    OR15 = 08:30-08:40 bars, ready once now >= 08:45 CT (reclaim triggers).
+    RVOL is time-of-day RVOL (framework R14) passed in by the tick (see live_rvol); the old
+    rvol_est (forming bar volume / OR-bar median) is retired. rvol_est is kept as an alias of
+    tod_rvol for older readers. Missing RVOL stays None and every RVOL gate fails closed."""
+    bars_5m = completed_bars(bars_5m, now)
+    rv = rvol or {}
+    tod = rv.get("tod_rvol")
+    base = {"tod_rvol": tod, "bar_rvol": rv.get("bar_rvol"), "rvol_est": tod,
+            "rvol_source": rv.get("source"), "rvol_note": rv.get("why"),
+            "rvol_metric": "time-of-day RVOL (cumulative to last completed bar / 20-session same-slot average)"}
+    or_bars = [b for b in bars_5m if (b["_dt"].hour, b["_dt"].minute) < OR30_END][:6]
+    o15 = [b for b in bars_5m if (b["_dt"].hour, b["_dt"].minute) < OR15_END][:3]
+    or15 = {"or15_ready": _hm(now) >= OR15_END and len(o15) >= 1,
+            "or15_high": round(max(b["h"] for b in o15), 4) if o15 else None,
+            "or15_low": round(min(b["l"] for b in o15), 4) if o15 else None}
+    if or15["or15_high"] is not None:
+        or15["or15_mid"] = round((or15["or15_high"] + or15["or15_low"]) / 2.0, 4)
+    latest = bars_5m[-1] if bars_5m else None
     if not or_bars:
-        return {"ready": False, "or_high": None, "or_low": None, "or_mid": None, "bar_count": 0}
+        return {"ready": False, "or_high": None, "or_low": None, "or_mid": None, "bar_count": 0, **base, **or15,
+                "latest": None, "completed_bars": len(bars_5m)}
+    ready = _hm(now) >= OR30_END and len(or_bars) >= 1
     hi = max(b["h"] for b in or_bars)
     lo = min(b["l"] for b in or_bars)
     mid = (hi + lo) / 2.0
-    # rvol estimate vs median volume of OR bars
-    vols = [b["v"] for b in or_bars if b.get("v")]
-    med = sorted(vols)[len(vols) // 2] if vols else 0
-    latest = bars_5m[-1] if bars_5m else None
-    rvol = None
-    if latest and med and med > 0:
-        rvol = latest["v"] / med
     return {
         "ready": ready,
         "or_high": round(hi, 4),
         "or_low": round(lo, 4),
         "or_mid": round(mid, 4),
         "bar_count": len(or_bars),
-        "rvol_est": round(rvol, 3) if rvol is not None else None,
+        **base, **or15,
+        "completed_bars": len(bars_5m),
         "latest": ({"o": latest["o"], "h": latest["h"], "l": latest["l"], "c": latest["c"], "t": latest["t"]} if latest else None),
         "prev_close": bars_5m[-2]["c"] if len(bars_5m) >= 2 else None,
     }
+
+
+ORDER_SCAN_LIMIT = 500  # Alpaca maximum page size; tickets not in the page are looked up by client_order_id
 
 
 def client_order_id(ticket_id: str) -> str:
@@ -313,13 +709,16 @@ def already_submitted(pe, ticket: dict, events_doc: dict) -> Tuple[bool, str]:
     try:
         orders = pe.alpaca_request(
             "GET", pe.ALPACA_PAPER_HOST, "/v2/orders",
-            params={"status": "all", "limit": 50, "direction": "desc"},
+            params={"status": "all", "limit": ORDER_SCAN_LIMIT, "direction": "desc"},
         ) or []
         for o in orders:
             if o.get("client_order_id") == coid:
                 return True, f"alpaca_order:{o.get('status')}"
     except Exception as e:
         return False, f"order_check_warn:{e}"
+    o = _order_by_coid(pe, coid)  # exact lookup, independent of how many orders came after it
+    if o:
+        return True, f"alpaca_order:{o.get('status')}"
     return False, "clear"
 
 
@@ -455,14 +854,20 @@ def parse_ticket_rules(ticket: dict) -> Dict[str, Any]:
         "ticket_id": tid, "ok": False, "mode": None, "direction": direction,
         "warnings": [], "entry": entry_f,
         "stop": ticket.get("stop"), "target1": ticket.get("target1"), "target2": ticket.get("target2"),
-        "entry_start": _hhmm(ticket.get("no_entry_before_ct")) or ENTRY_WINDOW_START,
+        "entry_start": None,
         "entry_end": ts.get("entry_end") or ENTRY_WINDOW_END,
         "eod_flat": ts.get("eod_flat") or EOD_FLAT,
         "time_stop": ts, "pre_invalidation": None, "inv": None, "retest": None, "fill_guard": None,
     }
+    # Earliest entry (Nov 12 2026, CEO-approved C3): the configured paper_engine.earliest_entry_ct
+    # (never before 08:45 CT). A ticket's own no_entry_before_ct / CIO-gate time can only make it later.
+    # Breakout/continuation modes still need the completed 30-minute opening range (09:00 CT).
+    t_start = _hhmm(ticket.get("no_entry_before_ct"))
     m = _re.search(r"no entry before\s*(\d{1,2}:\d{2})", gate, _re.I)
-    if m and not ticket.get("no_entry_before_ct"):
-        r["entry_start"] = _hhmm(m.group(1))
+    if m and not t_start:
+        t_start = _hhmm(m.group(1))
+    floor = earliest_entry()
+    r["entry_start"] = max(tuple(t_start), floor) if t_start else floor
 
     # legacy Friday OR/put-wall ticket
     if ("or_break" in ut or "or_rejection" in ut) and isinstance(ut.get("put_wall_zone"), (list, tuple)) \
@@ -500,7 +905,7 @@ def parse_ticket_rules(ticket: dict) -> Dict[str, Any]:
 
     # choose the primary trigger text deterministically
     text, key = None, None
-    for k in ("primary", "breakout", "breakdown", "failure", "trigger", "text"):
+    for k in ("primary", "breakout", "breakdown", "failure", "reclaim", "trigger", "text"):
         if isinstance(ut.get(k), str) and ut[k].strip():
             text, key = ut[k], k
             break
@@ -513,7 +918,31 @@ def parse_ticket_rules(ticket: dict) -> Dict[str, Any]:
     fade = _re.search(r"into\s+" + _RANGE + r"\s+that\s+(FAILS|HOLDS)\s*\(\s*close back\s+(below|above)\s+" + _NUM,
                       text, _re.I)
     acc = _re.search(r"acceptance\s+(above|below)\D*?" + _NUM, text, _re.I)
-    if fade:
+    # Reclaim trigger (framework R4/R13): explicit type/key, or text that starts with "reclaim".
+    # "reclaim above X": fire on completed close(s) >= X + reclaim_margin ($0.50 default; R13).
+    rec = None
+    if str(ut.get("type") or "").lower() == "reclaim" or key == "reclaim" or _re.match(r"\s*reclaim\b", text, _re.I):
+        rec = _re.search(r"reclaim\s+(?:back\s+)?(above|below)\D*?" + _NUM, text, _re.I)
+        if not rec:
+            r["warnings"].append(f"{tid}: reclaim trigger without 'reclaim above|below LEVEL': {text[:120]!r}")
+            return r
+    if rec:
+        side, lvl = rec.group(1).lower(), float(rec.group(2))
+        if (side == "above") != (direction == "long"):
+            r["warnings"].append(f"{tid}: reclaim {side} conflicts with direction {direction}")
+            return r
+        try:
+            margin = float(ut["reclaim_margin"]) if ut.get("reclaim_margin") is not None else float(engine_config().get("reclaim_margin", 0.5))
+        except Exception:
+            margin = 0.5
+        margin = max(0.0, margin)
+        trig = lvl + margin if side == "above" else lvl - margin
+        r.update({"mode": "reclaim", "level": lvl, "side": side, "reclaim_margin": margin,
+                  "trigger_level": round(trig, 4), "hold_bars": _hold_bars(text, 1)})
+        if r["rvol_min"] is None:
+            r["rvol_min"] = RVOL_FULL  # R15 applies to reclaims too
+        anchor = lvl
+    elif fade:
         a, b = sorted([float(fade.group(1)), float(fade.group(2))])
         verb, side, conf = fade.group(3).upper(), fade.group(4).lower(), float(fade.group(5))
         leg_dir = "short" if (verb == "FAILS" and side == "below") else ("long" if (verb == "HOLDS" and side == "above") else None)
@@ -549,7 +978,7 @@ def parse_ticket_rules(ticket: dict) -> Dict[str, Any]:
     if m:
         r["fill_guard"] = {"side": m.group(1).lower(), "level": float(m.group(2))}
 
-    inv_ref = (r.get("level") if r["mode"] == "acceptance" else r.get("confirm_level")) if r.get("is_option") else entry_f
+    inv_ref = (r.get("level") if r["mode"] in ("acceptance", "reclaim") else r.get("confirm_level")) if r.get("is_option") else entry_f
     inv = _parse_hard_inv(str(ticket.get("hard_invalidation_underlying") or ""), direction, inv_ref,
                           anchor if r["mode"] == "wall_fade" else None)
     if inv is None:
@@ -582,6 +1011,7 @@ def pre_trigger_invalidated(or_info: dict, bars_5m: List[dict], now: datetime,
     if not or_info.get("ready"):
         return False, ""
     pi = rules["pre_invalidation"]
+    bars_5m = completed_bars(bars_5m, now)
     post = [b for b in bars_5m if (b["_dt"].hour, b["_dt"].minute) >= (9, 0)]
     n = int(pi.get("bars") or 2)
     if len(post) < n:
@@ -625,10 +1055,8 @@ def _evaluate_legacy(ticket: dict, or_info: dict, bars_5m: List[dict], rules: di
     wick = latest["h"] > latest["c"] and latest["h"] >= min(wall_lo, or_high)
     red = latest["c"] < latest["o"]
     below_mid = latest["c"] < or_mid
-    rvol = or_info.get("rvol_est") or 0
-    rvol_ok = rvol >= 1.3 or (latest.get("v") or 0) == 0
-    if latest.get("v"):
-        rvol_ok = rvol >= 1.5 or rvol >= 1.3
+    rvol = or_info.get("tod_rvol")
+    rvol_ok = rvol is not None and rvol >= 1.3  # time-of-day RVOL; missing => no fire
     if tested and failed_wall and below_mid and (wick or red) and rvol_ok:
         return True, (
             f"OR/put-wall rejection: high {session_high:.2f} tested wall, 5m close {latest['c']:.2f} < OR_mid {or_mid:.2f} "
@@ -639,17 +1067,26 @@ def _evaluate_legacy(ticket: dict, or_info: dict, bars_5m: List[dict], rules: di
 
 def evaluate_entry(ticket: dict, or_info: dict, bars_5m: List[dict], now: datetime,
                    rules: Optional[dict] = None) -> Tuple[bool, str, dict]:
-    """Return (fired, reason, meta), driven by parse_ticket_rules(ticket)."""
+    """Return (fired, reason, meta), driven by parse_ticket_rules(ticket).
+
+    Nov 12 2026 (framework v1.2): COMPLETED 5m bars only; time-of-day RVOL (or_info tod_rvol) with
+    R15 tiers for acceptance/reclaim; reclaim triggers may arm from the configured earliest entry
+    (08:45 floor) on OR15, everything else needs the completed OR30 (09:00). meta["size_factor"]
+    carries the R21 size factor (reclaim before 09:00 = 1/2, RVOL half tier = 1/2)."""
     rules = rules or parse_ticket_rules(ticket)
     if not rules.get("ok"):
         return False, "unparsed: " + "; ".join(rules.get("warnings") or ["unknown"]), {"mode": "unparsed"}
-    if not or_info.get("ready") or not bars_5m:
-        return False, "OR not ready", {}
+    bars_5m = completed_bars(bars_5m, now)
+    mode = rules["mode"]
     es, ee = rules["entry_start"], rules["entry_end"]
     if not _in_window(now, es, ee):
         return False, f"outside entry window {es[0]:02d}:{es[1]:02d}–{ee[0]:02d}:{ee[1]:02d} CT", {}
+    if mode == "reclaim":
+        if not or_info.get("or15_ready") or not bars_5m:
+            return False, "OR15 not ready (reclaim arms from 08:45 CT on completed bars)", {}
+    elif not or_info.get("ready") or not bars_5m:
+        return False, "OR not ready (breakout/continuation needs the completed 30-minute range, 09:00 CT)", {}
     latest = bars_5m[-1]
-    mode = rules["mode"]
 
     if mode == "generic":
         if ticket.get("trigger_spy_below") is not None and latest["c"] < float(ticket["trigger_spy_below"]):
@@ -661,17 +1098,36 @@ def evaluate_entry(ticket: dict, or_info: dict, bars_5m: List[dict], now: dateti
     if mode == "legacy_or":
         return _evaluate_legacy(ticket, or_info, bars_5m, rules)
 
-    # New-style tickets require a measured RVOL (no volume means no fire).
-    rvol = or_info.get("rvol_est")
+    # New-style tickets require a measured time-of-day RVOL (missing => no fire).
+    rvol = or_info.get("tod_rvol")
+    bar_rvol = or_info.get("bar_rvol")
     rvol_min = float(rules["rvol_min"])
-    rvol_ok = rvol is not None and rvol >= rvol_min
     short = rules["direction"] == "short"
-    meta = {"mode": mode, "spy": latest["c"], "rvol": rvol, "rvol_min": rvol_min}
+    meta = {"mode": mode, "spy": latest["c"], "rvol": rvol, "bar_rvol": bar_rvol, "rvol_min": rvol_min,
+            "trigger_bar_ct": latest["_dt"].strftime("%H:%M")}
+    factors: List[float] = []
+    reasons: List[str] = []
+    closes = [b["c"] for b in bars_5m if (b["_dt"].hour, b["_dt"].minute) >= (8, 30)]
+    tier = None
 
-    if mode == "acceptance":
-        closes = [b["c"] for b in bars_5m if (b["_dt"].hour, b["_dt"].minute) >= (8, 30)]
-        accepted = _consec(closes, rules["side"], rules["level"], int(rules["hold_bars"]))
-        cond = f"{rules['hold_bars']}×5m close {rules['side']} {rules['level']:.2f}"
+    if mode in ("acceptance", "reclaim"):
+        cfg = engine_config()
+        full_min = max(rvol_min, RVOL_FULL)
+        tier = rvol_tier(rvol, full_min, cfg["rvol_half_size_tier_enabled"])
+        meta.update({"rvol_tier": tier["tier"], "rvol_full_min": full_min,
+                     "rvol_half_tier_enabled": cfg["rvol_half_size_tier_enabled"]})
+        lvl = rules["level"] if mode == "acceptance" else rules["trigger_level"]
+        side = rules["side"]
+        hold = int(rules["hold_bars"])
+        if mode == "acceptance":
+            cond = f"{hold}×5m close {side} {lvl:.2f}"
+            accepted = _consec(closes, side, lvl, hold)
+        else:
+            # reclaim: close back inside by >= margin (inclusive at the margin)
+            eps = 1e-9
+            tail = closes[-hold:] if len(closes) >= hold else []
+            accepted = bool(tail) and all((c >= lvl - eps) if side == "above" else (c <= lvl + eps) for c in tail)
+            cond = f"{hold}×5m close {'≥' if side == 'above' else '≤'} {lvl:.2f} (reclaim of {rules['level']:.2f} by {rules['reclaim_margin']:.2f})"
         if not accepted:
             return False, f"waiting: {cond} (last {latest['c']:.2f})", meta
     elif mode == "wall_fade":
@@ -698,9 +1154,37 @@ def evaluate_entry(ticket: dict, or_info: dict, bars_5m: List[dict], now: dateti
         bad = (latest["c"] < fg["level"]) if fg["side"] == "below" else (latest["c"] > fg["level"])
         if bad:
             return False, f"skip: price {latest['c']:.2f} {fg['side']} fill guard {fg['level']:.2f}", meta
-    if not rvol_ok:
-        return False, f"waiting: RVOL {rvol if rvol is not None else 'n/a'} < {rvol_min}", meta
-    return True, f"{mode}: {cond}; RVOL {rvol:.2f} ≥ {rvol_min}" + (" + CIO retest/reject" if rt else ""), meta
+
+    if tier is not None:
+        if not tier["allow"]:
+            return False, f"waiting: {tier['why']}", meta
+        if tier["hold2"]:
+            # half tier: 2-bar hold unless the trigger bar is >= 1.5x its slot
+            sub = bar_rvol is not None and float(bar_rvol) >= BAR_RVOL_SUBSTITUTE
+            if not sub:
+                lvl = rules["level"] if mode == "acceptance" else rules["trigger_level"]
+                n2 = max(2, int(rules["hold_bars"]))
+                if mode == "acceptance":
+                    ok2 = _consec(closes, rules["side"], lvl, n2)
+                else:
+                    tail = closes[-n2:] if len(closes) >= n2 else []
+                    ok2 = bool(tail) and all((c >= lvl - 1e-9) if rules["side"] == "above" else (c <= lvl + 1e-9) for c in tail)
+                if not ok2:
+                    return False, f"waiting: half-size RVOL tier needs a {n2}-bar hold ({tier['why']})", meta
+            factors.append(0.5); reasons.append("RVOL half tier")
+        rv_txt = tier["why"]
+    else:
+        if rvol is None or rvol < rvol_min:
+            return False, f"waiting: RVOL {rvol if rvol is not None else 'n/a'} < {rvol_min} (fail closed when unavailable)", meta
+        rv_txt = f"RVOL {rvol:.2f} ≥ {rvol_min}"
+
+    if mode == "reclaim" and _hm(now) < OR30_END:
+        factors.append(0.5); reasons.append("reclaim armed before 09:00 CT")
+    meta["size_factor"] = combine_size_factors(factors)
+    meta["size_factors"] = factors
+    meta["size_reasons"] = reasons
+    sz = f"; size ×{meta['size_factor']:g} ({', '.join(reasons)})" if reasons else ""
+    return True, f"{mode}: {cond}; {rv_txt}" + (" + CIO retest/reject" if rt else "") + sz, meta
 
 
 def decide_armed_ticket(ticket: dict, or_info: dict, bars_5m: List[dict], now: datetime) -> Dict[str, Any]:
@@ -845,7 +1329,7 @@ def submit_ticket(pe, ticket: dict, reason: str, or_info: dict, events_doc: dict
             events_doc, "TRIGGER_SIM", tid,
             f"[SIM] Trigger hit — would {side_word} {qty}× {occ} @ ${limit:.2f} LMT",
             f"{reason}. OR {or_info.get('or_low')}–{or_info.get('or_high')}. force_sim=1 (no order sent).",
-            severity="warn", symbol=occ,
+            severity="warn", symbol=occ, extra=(dict(ticket["gex45_check"]) if ticket.get("gex45_check") else None),
         )
         return {"mode": "force_sim", "submitted": False, "occ": occ, "limit": limit}
 
@@ -860,9 +1344,79 @@ def submit_ticket(pe, ticket: dict, reason: str, or_info: dict, events_doc: dict
         f"Trigger hit ({reason}). Firewall 6/6 PASS (${ticket.get('actual_dollar_risk', 120)} max risk). OR "
         f"${or_info.get('or_low')}–${or_info.get('or_high')}.",
         severity="pos", symbol=occ,
-        extra={"alpaca_order_id": (result.get("response") or {}).get("id") if isinstance(result.get("response"), dict) else ticket.get("alpaca_order_id")},
+        extra={"alpaca_order_id": (result.get("response") or {}).get("id") if isinstance(result.get("response"), dict) else ticket.get("alpaca_order_id"),
+               **(dict(ticket["gex45_check"]) if ticket.get("gex45_check") else {})},
     )
     return {"mode": "submitted_paper", "submitted": True, "result": result, "occ": occ, "limit": limit}
+
+
+def _log_once(events_doc: dict, kind: str, tid: str, headline: str, detail: str, symbol: str = "",
+              severity: str = "neg") -> None:
+    if not any(e.get("ticket_id") == tid and e.get("kind") == kind and e.get("detail") == detail
+               for e in events_doc.get("events") or []):
+        append_event(events_doc, kind, tid, headline, detail, severity=severity, symbol=symbol)
+
+
+def arm_time_gates(pe, ticket: dict, rules: dict, meta: dict, bars_5m: List[dict], now: datetime,
+                   events_doc: dict, force_sim: bool, latest_doc: Optional[dict] = None,
+                   cfg: Optional[dict] = None) -> Dict[str, Any]:
+    """Checks between a trigger firing and order submission (Nov 12 2026, all tightening):
+      1) firewall check 5 with LIVE 0DTE walls (fail closed);
+      2) option premiums repriced from a live quote (R24) or the ticket is voided;
+      3) size factor (reclaim before 09:00 / RVOL half tier) applied to the quantity.
+    Returns {"action": "submit"|"hold"|"void", "ticket": ticket_to_submit, "why": str}.
+    Staged values are kept on the ticket as staged_* and every re-arm recomputes from them."""
+    cfg = cfg or engine_config()
+    tid = ticket.get("ticket_id")
+    done = completed_bars(bars_5m, now)
+    spot = done[-1]["c"] if done else None
+    ok, why = live_wall_check(spot, now, latest_doc, cfg)
+    if not ok:
+        return {"action": "hold", "ticket": ticket, "why": why}
+    g45, g45_info = net_gex_45d_conservative(latest_doc)
+    g45_txt = (f"45D net GEX grid {g45_info['net_gex_45d_grid_at_chain_spot']} / printed "
+               f"{g45_info['net_gex_45d_printed']} → used {g45}")
+    if g45 is None:
+        return {"action": "hold", "ticket": ticket, "gex45": g45_info,
+                "why": "45D net GEX unavailable (grid and printed both missing); entry held (fail closed)"}
+    factors = list(meta.get("size_factors") or ([] if float(meta.get("size_factor") or 1.0) >= 1.0 else [float(meta["size_factor"])]))
+    reasons = list(meta.get("size_reasons") or [])
+    if g45 < GEX45_CAP_DOLLARS:
+        factors.append(0.5); reasons.append("45D net GEX < -$5B (more negative of grid/printed)")
+    meta = {**meta, "size_factor": combine_size_factors(factors), "size_factors": factors, "size_reasons": reasons}
+    t = dict(ticket)
+    t["gex45_check"] = {**g45_info, "cap_applied": g45 < GEX45_CAP_DOLLARS}
+    mult = 100 if not _is_stock(t) else 1
+    if "staged_entry" not in t:  # first arm: freeze the staged card values once
+        for f in ("entry", "stop", "target1", "target2", "quantity", "actual_dollar_risk"):
+            t[f"staged_{f}"] = t.get(f)
+        if t.get("staged_actual_dollar_risk") is None:
+            t["staged_actual_dollar_risk"] = round(abs(float(t["entry"]) - float(t["stop"])) * int(t["quantity"]) * mult, 2)
+    for f in ("entry", "stop", "target1", "target2", "quantity", "actual_dollar_risk"):
+        t[f] = t.get(f"staged_{f}")
+    if not _is_stock(t):
+        occ, _, _ = resolve_occ(pe, t)
+        quote, qwhy = option_live_quote(pe, occ)
+        if quote is None:  # one retry inside the tick before voiding
+            quote, qwhy = option_live_quote(pe, occ)
+        rp, rwhy = reprice_option_ticket(t, rules, quote, spot, now, cfg)
+        if rp is None:
+            return {"action": "void", "ticket": ticket, "why": f"Stale premium: {rwhy if quote else qwhy}; ticket voided (no chase)"}
+        t.update({k: v for k, v in rp.items() if k != "reprice"})
+        t["arm_reprice"] = rp["reprice"]
+        t["oco_bracket"] = {**(t.get("oco_bracket") or {}), "stop_order": t["stop"],
+                            "take_profit_1": t.get("target1"), "take_profit_2": t.get("target2")}
+    factor = float(meta.get("size_factor") or 1.0)
+    q0 = int(t.get("quantity") or 0)
+    q = int(q0 * factor) if factor < 1.0 else q0
+    if q < 1:
+        return {"action": "hold", "ticket": ticket,
+                "why": f"Size ×{factor:g} ({', '.join(meta.get('size_reasons') or [])}) rounds {q0} to 0; entry held"}
+    t["quantity"] = q
+    t["size_factor"] = factor
+    t["size_reasons"] = meta.get("size_reasons") or []
+    t["actual_dollar_risk"] = round(abs(float(t["entry"]) - float(t["stop"])) * q * mult, 2)
+    return {"action": "submit", "ticket": t, "why": f"{why}; {g45_txt}", "gex45": g45_info}
 
 
 ACTIVE_STATUSES = {"submitted_paper", "filled_paper"}
@@ -877,13 +1431,28 @@ def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dic
         positions = pe.alpaca_request("GET", pe.ALPACA_PAPER_HOST, "/v2/positions") or []
         orders = pe.alpaca_request(
             "GET", pe.ALPACA_PAPER_HOST, "/v2/orders",
-            params={"status": "all", "limit": 50, "direction": "desc"},
+            params={"status": "all", "limit": ORDER_SCAN_LIMIT, "direction": "desc"},
         ) or []
     except Exception as e:
         return [f"manage_skip:{e}"]
 
     by_coid = {o.get("client_order_id"): o for o in orders if o.get("client_order_id")}
     rows = blotter_rows()
+    # Nov 12 2026: orders older than the listed page are fetched by OUR client_order_id, so the
+    # 14:30 cancel, fill detection and breakeven never miss a ticket because of paging.
+    for t in rows:
+        if t.get("status") not in ACTIVE_STATUSES or not t.get("ticket_id"):
+            continue
+        for coid in (client_order_id(t["ticket_id"]), f"horsey-t1-{t['ticket_id']}"[:48]):
+            if coid in by_coid:
+                continue
+            if coid.startswith("horsey-t1-") and not any(
+                    e.get("ticket_id") == t["ticket_id"] and e.get("kind") == "TARGET1_SCALED"
+                    for e in events_doc.get("events") or []):
+                continue
+            o = _order_by_coid(pe, coid)
+            if o:
+                by_coid[coid] = o
     # Stock tickets share the underlying symbol, so a position is only attributable
     # when exactly one active stock ticket trades that symbol.
     active_stock_by_sym: Dict[str, int] = {}
@@ -936,6 +1505,7 @@ def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dic
         # 14:30 CT: cancel an entry order that is still completely unfilled (that order only,
         # by id; never cancel-all). Partially/fully filled entries and positions are left alone.
         if (ticket.get("status") == "submitted_paper" and entry_order and _hm(now) >= ENTRY_WINDOW_END
+                and entry_order.get("client_order_id") == coid
                 and entry_order.get("status") in OPEN_ENTRY_STATES and float(entry_order.get("filled_qty") or 0) == 0
                 and entry_order.get("id")):
             sym = entry_order.get("symbol") or ""
@@ -1021,7 +1591,7 @@ def manage_open_positions(pe, events_doc: dict, or_info: dict, bars_5m: List[dic
                 # cancel open orders for this symbol only (bracket legs / child orders)
                 open_orders = pe.alpaca_request(
                     "GET", pe.ALPACA_PAPER_HOST, "/v2/orders",
-                    params={"status": "open", "limit": 50},
+                    params={"status": "open", "limit": ORDER_SCAN_LIMIT, "symbols": occ},
                 ) or []
                 for o in open_orders:
                     if o.get("symbol") == occ:
@@ -1545,7 +2115,19 @@ def alpaca_rth_tick(pe, force_sim: bool = False, push_if_changed: bool = False,
             bars = yb
             source = "yahoo_fallback"
 
-    or_info = compute_or(bars, now)
+    cfg = engine_config()
+    latest_doc = load_latest()
+    all_bars = bars                       # exits keep today's behaviour (all bars)
+    bars = completed_bars(all_bars, now)  # triggers: completed 5m bars only
+    rv = live_rvol(now, bars, latest_doc) if bars else {"tod_rvol": None, "bar_rvol": None, "why": "no completed bars"}
+    or_info = compute_or(bars, now, rvol=rv)
+    fed_blocked, fed_why, fed_warn = fed_speaker_blackout(now)
+    if fed_warn:
+        result.setdefault("warnings", []).append(fed_warn)
+        print(f"[alpaca_rth] WARNING {fed_warn}", file=sys.stderr)
+    result["engine"] = {"earliest_entry_ct": "%02d:%02d" % earliest_entry(cfg),
+                        "rvol_half_size_tier_enabled": cfg["rvol_half_size_tier_enabled"],
+                        "fed_blackout": fed_why or None}
     events_doc["status"] = "watching" if market_openish else "force_sim"
     events_doc["rth"] = {
         "is_open": is_open,
@@ -1559,7 +2141,7 @@ def alpaca_rth_tick(pe, force_sim: bool = False, push_if_changed: bool = False,
     result["bars_5m"] = len(bars)
 
     # Manage open positions first
-    notes = manage_open_positions(pe, events_doc, or_info, bars, now, force_sim=force_sim)
+    notes = manage_open_positions(pe, events_doc, or_info, all_bars, now, force_sim=force_sim)
     if notes:
         changed = True
         result["actions"].extend(notes)
@@ -1608,8 +2190,12 @@ def alpaca_rth_tick(pe, force_sim: bool = False, push_if_changed: bool = False,
 
         if force_sim and not market_openish:
             # Evaluate with whatever bars we have but never submit
-            fired, reason, meta = evaluate_entry(ticket, or_info, bars, now, rules) if or_info.get("ready") else (False, "OR not ready (sim)", {})
+            fired, reason, meta = evaluate_entry(ticket, or_info, bars, now, rules)
             result["actions"].append(f"sim_eval:{tid}:{fired}:{reason}")
+            continue
+
+        if fed_blocked:
+            result["actions"].append(f"blackout:{tid}:{fed_why}")
             continue
 
         fired, reason, meta = evaluate_entry(ticket, or_info, bars, now, rules)
@@ -1617,8 +2203,35 @@ def alpaca_rth_tick(pe, force_sim: bool = False, push_if_changed: bool = False,
             result["actions"].append(f"wait:{tid}:{reason}")
             continue
 
-        # Real RTH trigger — submit (unless force_sim)
+        # Real RTH trigger — arm-time gates, then submit (unless force_sim)
         try:
+            g = arm_time_gates(pe, ticket, rules, meta, bars, now, events_doc, force_sim, latest_doc, cfg)
+            sym = ((ticket.get("alpaca_paper_payload") or {}).get("order") or {}).get("symbol") or ticket.get("symbol") or ""
+            if g["action"] == "hold":
+                _log_once(events_doc, "SUBMIT_BLOCKED", tid, f"Entry not submitted: {tid}", g["why"], sym)
+                if g.get("gex45"):
+                    for e in reversed(events_doc.get("events") or []):
+                        if e.get("ticket_id") == tid and e.get("kind") == "SUBMIT_BLOCKED":
+                            e.update(g["gex45"]); break
+                changed = True
+                result["actions"].append(f"hold:{tid}:{g['why']}")
+                continue
+            if g["action"] == "void":
+                if force_sim:
+                    append_event(events_doc, "TICKET_VOIDED", tid, f"[SIM] Ticket would be voided: {tid}", g["why"], "warn", sym)
+                else:
+                    rewrite_blotter_ticket(tid, lambda t, _w=g["why"]: {**t, "status": "voided_paper",
+                                                                     "void_reason": _w, "voided_ct": _iso_ct()})
+                    append_event(events_doc, "TICKET_VOIDED", tid, f"Ticket voided at arm time: {tid}", g["why"], "neg", sym)
+                changed = True
+                result["actions"].append(f"voided:{tid}:{g['why']}")
+                continue
+            ticket = g["ticket"]
+            if not force_sim:
+                _new = ticket
+                rewrite_blotter_ticket(tid, lambda t, _n=_new: {**t, **{k: _n[k] for k in _n if k.startswith("staged_") or k in (
+                    "entry", "stop", "target1", "target2", "quantity", "actual_dollar_risk", "oco_bracket",
+                    "arm_reprice", "size_factor", "size_reasons", "gex45_check")}})
             sub = submit_ticket(pe, ticket, reason, or_info, events_doc, force_sim=force_sim)
             changed = True
             result["actions"].append({"submit": sub, "reason": reason, "meta": meta})

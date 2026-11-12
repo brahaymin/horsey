@@ -41,8 +41,15 @@ def at(h, m):
     return datetime(*DAY, h, m, 30, tzinfo=CT)
 
 
+def synth_rvol(bars, now):
+    """Synthetic time-of-day RVOL for these fixtures: last COMPLETED bar volume / 1000
+    (the live engine computes it from consolidated bars vs the monitor's 20-session curve)."""
+    done = rth.completed_bars(bars, now)
+    return {"tod_rvol": (done[-1]["v"] / 1000.0) if done else None, "bar_rvol": None, "source": "test"}
+
+
 def run(ticket, bars, now):
-    or_info = rth.compute_or(bars, now)
+    or_info = rth.compute_or(bars, now, rvol=synth_rvol(bars, now))
     return rth.decide_armed_ticket(ticket, or_info, bars, now), or_info
 
 

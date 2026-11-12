@@ -54,6 +54,7 @@ def or_bars(lo, hi):
     return [bar(8, 30 + 5 * i, mid, hi if i == 1 else mid + 0.2, lo if i == 3 else mid - 0.2, mid) for i in range(6)]
 
 
+RV2 = {"tod_rvol": 2.0, "bar_rvol": 2.0, "source": "test"}  # synthetic time-of-day RVOL
 FW = [{"id": i, "name": f"check {i}", "pass": True} for i in range(1, 7)]
 
 
@@ -248,7 +249,10 @@ class FailClosed(_Base):
                      "save_events": lambda d: None, "rewrite_blotter_ticket": lambda tid, fn: rewrites.append(tid),
                      "fetch_alpaca_bars": lambda *a: [dict(b) for b in bars], "manage_open_positions": lambda *a, **k: [],
                      "push_vault_if_changed": lambda *a: {}, "already_submitted": lambda *a: (False, "clear"),
-                     "submit_ticket": lambda *a, **k: submits.append(1)}.items():
+                     "submit_ticket": lambda *a, **k: submits.append(1),
+                     # Nov 12: RVOL and arm-time gates are covered in test_rth_framework_fixes.py
+                     "live_rvol": lambda *a, **k: dict(RV2),
+                     "arm_time_gates": lambda pe_, tk, *a, **k: {"action": "submit", "ticket": tk, "why": "stub"}}.items():
             self.p.set(rth, k, v)
         res = rth.alpaca_rth_tick(TPE)
         self.assertEqual(submits, []); self.assertEqual(rewrites, [])
@@ -263,10 +267,11 @@ class FailClosed(_Base):
 # ------------------------------------------------------------------ entry rules
 class EntryRules(_Base):
     def fire_bars(self):
-        return or_bars(759.0, 760.4) + [bar(14, 25, 760.4, 761.2, 760.3, 761.0, 2000)]
+        # 14:20 bar completes at 14:25 (Nov 12: a still-forming bar never counts as a close)
+        return or_bars(759.0, 760.4) + [bar(14, 20, 760.4, 761.2, 760.3, 761.0, 2000)]
 
     def test_call_fires_inside_window(self):
-        d = rth.decide_armed_ticket(CALL(), rth.compute_or(self.fire_bars(), at(14, 29)), self.fire_bars(), at(14, 29))
+        d = rth.decide_armed_ticket(CALL(), rth.compute_or(self.fire_bars(), at(14, 29), rvol=RV2), self.fire_bars(), at(14, 29))
         self.assertEqual(d["action"], "fire", d["reason"])
 
     def test_no_entry_after_1430_even_if_ticket_says_later(self):
@@ -280,7 +285,7 @@ class EntryRules(_Base):
         self.assertEqual((r["direction"], r["side"], r["level"]), ("short", "below", 755.0))
         self.assertEqual((r["inv"]["side"], r["inv"]["level"], r["inv"]["bars"]), ("above", 756.2, 2))
         bars = or_bars(755.5, 757.0) + [bar(9, 30, 755.4, 755.5, 754.6, 754.8, 2000)]
-        self.assertEqual(rth.decide_armed_ticket(PUT(), rth.compute_or(bars, at(9, 36)), bars, at(9, 36))["action"], "fire")
+        self.assertEqual(rth.decide_armed_ticket(PUT(), rth.compute_or(bars, at(9, 36), rvol=RV2), bars, at(9, 36))["action"], "fire")
 
     def test_call_invalidation_level_from_underlying_not_premium(self):
         r = rth.parse_ticket_rules(CALL())
