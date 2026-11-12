@@ -1,0 +1,19 @@
+{
+  "prompt_set_id": "CEO-Q-2026-11-12-POSTCLOSE",
+  "status": "submitted",
+  "submitted_ct": "2026-11-12T15:36:50-0600",
+  "saved_ct": "2026-11-12T15:36:50-0600",
+  "session_target": "2026-11-13",
+  "briefing_ref": "pod/cio_briefings/2026-11-12_1530-ct-postclose_cio_briefing.md",
+  "responses": {
+    "friday_scenario_card": "approve_for_staging",
+    "rvol_half_size_tier": "keep_off",
+    "fix_equity_reference": "yes_fix_to_100k",
+    "drip_pause": "pause_btci_aipi_only",
+    "student_debt_payoff_target": "Confirmed - RH account has BTCI and AIPI DRIP turned off. Distributions will now go to Margin Debt"
+  },
+  "risk_pct": null,
+  "ceo_note": "",
+  "last_ceo_note": "",
+  "source": "horsey web app"
+}
